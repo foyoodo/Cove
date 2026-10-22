@@ -21,7 +21,7 @@ func TestModelMenuOpensOnClick(t *testing.T) {
 	a := modelSwitchApp(t, t.TempDir())
 	tt := openTester(a)
 	clickOpensModelMenu(t, tt, "Model alpha", "alpha")
-	menu := tt.Menu()
+	menu := modelMenuLabels(t, tt)
 	if !menuHas(menu, "North") || !menuHas(menu, "alpha") || !menuHas(menu, "South") || !menuHas(menu, "beta") {
 		t.Fatalf("menu %v", menu)
 	}
@@ -30,7 +30,7 @@ func TestModelMenuOpensOnClick(t *testing.T) {
 			t.Fatalf("menu item still joins provider and model: %q in %v", label, menu)
 		}
 	}
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 
 	b := newTestApp(t)
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
@@ -47,7 +47,7 @@ func TestModelMenuOpensOnClick(t *testing.T) {
 	b.data.ActiveID = "c"
 	tb := openTester(b)
 	clickOpensModelMenu(t, tb, "Model No model", "No model")
-	if got := tb.Menu(); len(got) != 1 || got[0] != "Add a provider…" {
+	if got := modelMenuLabels(t, tb); len(got) != 1 || got[0] != "Add a provider…" {
 		t.Fatalf("empty provider menu %v", got)
 	}
 }
@@ -76,7 +76,7 @@ func TestModelMenuCheckFollowsButtonChat(t *testing.T) {
 	if err := tt.Click("Model alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Menu() == nil {
+	if !modelMenuOpen(tt) {
 		t.Fatal("menu did not open")
 	}
 	rows := menuRows(t, tt)
@@ -86,7 +86,7 @@ func TestModelMenuCheckFollowsButtonChat(t *testing.T) {
 	if on, ok := modelChecked(rows, "South", "beta"); !ok || on {
 		t.Fatalf("c1 checked south %+v", rows)
 	}
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 
 	a.selectChat("c2")
 	tt.Frame()
@@ -170,7 +170,7 @@ func TestModelChoiceKeepsGlobalDefault(t *testing.T) {
 	if err := tt.Click("Model alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Menu() == nil {
+	if !modelMenuOpen(tt) {
 		t.Fatal("menu did not open")
 	}
 	chooseGroupedModel(t, tt, "South", "gamma")
@@ -307,7 +307,7 @@ func TestCatalogIDMatchesHeader(t *testing.T) {
 	if err := tt.Click("Model OpenRouter · gpt-4o"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Menu() == nil {
+	if !modelMenuOpen(tt) {
 		t.Fatal("menu did not open")
 	}
 	rows := menuRows(t, tt)
@@ -377,7 +377,7 @@ func TestCatalogIDMatchesHeader(t *testing.T) {
 	if on, ok := modelChecked(rows, "OpenRouter", "openai/gpt-4o"); !ok || !on {
 		t.Fatalf("enabled catalog id missing after the list changed %+v", rows)
 	}
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 
 	a.connByID("conn-or").Name = "Router West"
 	tt.Frame()
@@ -394,7 +394,7 @@ func TestCatalogIDMatchesHeader(t *testing.T) {
 	if _, ok := modelChecked(rows, "OpenRouter", "openai/gpt-4o"); ok {
 		t.Fatal("menu kept the name from before the rename")
 	}
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 	if a.conversation("c1").Config.Model != "openai/gpt-4o" {
 		t.Fatalf("rename rewrote the model id %q", a.conversation("c1").Config.Model)
 	}
@@ -459,7 +459,7 @@ func TestBuiltinCatalogIDStaysQualified(t *testing.T) {
 	if err := tt.Click("Model gpt-4o-mini"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Menu() == nil {
+	if !modelMenuOpen(tt) {
 		t.Fatal("menu did not open")
 	}
 	rows := menuRows(t, tt)
@@ -472,7 +472,7 @@ func TestBuiltinCatalogIDStaysQualified(t *testing.T) {
 	if _, on := modelChecked(rows, "OpenRouter", "anthropic/claude-sonnet-4.5"); on {
 		t.Fatal("disabled preset model was listed")
 	}
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 
 	c := a.connByID("openrouter")
 	c.Models = []ProviderModel{
@@ -520,9 +520,9 @@ func clickOpensModelMenu(t *testing.T, tt *ui.Tester, a11y, visible string) {
 		{r.X + r.W - 6, r.Y + r.H/2},
 	}
 	for _, p := range points {
-		tt.CloseMenu()
+		closeModelMenu(t, tt)
 		tt.ClickAt(p[0], p[1])
-		if tt.Menu() == nil {
+		if !modelMenuOpen(tt) {
 			t.Fatalf("click at %.1f,%.1f on %q did not open the model menu", p[0], p[1], a11y)
 		}
 	}

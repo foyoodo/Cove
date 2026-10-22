@@ -64,6 +64,16 @@ type sideRow struct {
 func (a *App) view(c *ui.Context) {
 	a.inRender = true
 	defer func() { a.inRender = false }()
+	// modelMenuSeen is set by the composer menu while its popup is open.
+	// A pass that builds no open menu drops the chat recorded for it, so
+	// the next chat's checks cannot inherit the previous one. Early
+	// returns (settings, state boards) count as closed.
+	defer func() {
+		if !a.modelMenuSeen {
+			a.modelMenuChat = ""
+		}
+		a.modelMenuSeen = false
+	}()
 	a.trackWindowFocus(c)
 	a.applyLook(c)
 	a.md.OnLink = func(url string) { c.OpenURL(url) }
@@ -872,85 +882,241 @@ func (a *App) providerChip(c *ui.Context, conv *Conversation) {
 	})
 }
 
+// modelMenuMaxH is the tallest the composer model popup grows, about
+// sixteen rows. A shorter gap above or below the chip uses that gap.
+const modelMenuMaxH float32 = 360
+
+// modelMenuSettings and modelMenuAdd are popup values for the trailing
+// action. They are not model ids.
+const (
+	modelMenuSettings = "\x1esettings"
+	modelMenuAdd      = "\x1eadd"
+)
+
 func (a *App) modelMenu(c *ui.Context, conv *Conversation) ui.Element {
-	provider, model := a.composerModelParts(conv.Config)
+	p := a.look
+	chatID := ""
+	screen := Config{}
+	if conv != nil {
+		chatID = conv.ID
+		screen = conv.Config
+	}
+	// SelectBase applies the opening click as it returns, so Open is
+	// already true on that pass. The value starts as the chat on screen
+	// and is retargeted to the chat that opened the popup before the
+	// rows are built.
+	pick := modelChoiceID(screen.ConnectionID, screen.Model)
+	sel := ui.SelectBase(c.Key("model-menu"), &pick)
+	b := sel.Trigger
+	b.Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Background(p.ControlBg).Border(1, p.ControlBorder).Cursor(ui.CursorPointer).MaxWidth(180).MinWidth(0)
+	switch {
+	case b.Pressed():
+		b.Background(p.FillPressed)
+	case b.Hovered():
+		b.Background(p.FillHover)
+	}
+	if sel.Open() && a.modelMenuChat == "" {
+		a.modelMenuChat = chatID
+	}
+	ownerID := chatID
+	cfg := screen
+	if sel.Open() && a.modelMenuChat != "" {
+		ownerID = a.modelMenuChat
+		if shown := a.conversation(ownerID); shown != nil {
+			cfg = shown.Config
+			pick = modelChoiceID(cfg.ConnectionID, cfg.Model)
+		}
+	}
+	if sel.Open() {
+		a.modelMenuPopup(c, sel, b, cfg)
+	}
+	if b.Changed() {
+		a.applyModelMenuChoice(ownerID, pick)
+		if ownerID == chatID && conv != nil {
+			cfg = conv.Config
+			screen = conv.Config
+		}
+	}
+	if sel.Open() {
+		a.modelMenuSeen = true
+		if a.modelMenuChat == "" {
+			a.modelMenuChat = chatID
+		}
+	}
+	provider, model := a.composerModelParts(screen)
 	label := model
 	if provider != "" {
 		label = provider + " · " + model
 	}
-	dot := a.configColor(conv.Config)
+	dot := a.configColor(screen)
 	if model == "No model" {
 		dot = ui.Color{}
 	}
-	chatID := ""
-	if conv != nil {
-		chatID = conv.ID
-	}
-	return a.chipMenu(c, provider, model, "Model "+label, dot, false, func(m *ui.Menu) {
-		// Checks follow the button. The choice frame rebuilds this menu
-		// for whichever chat is on screen, so the write uses the chat
-		// recorded when the menu opened. A dismissed menu must not leave
-		// that id in place for the next chat's check marks.
-		shown := a.conversation(chatID)
-		cfg := Config{}
-		if shown != nil {
-			cfg = shown.Config
+	b.Label("Model " + label)
+	b.Children(func() {
+		if dot.A > 0 {
+			ui.Box(c).Size(6, 6).Radius(3).Background(dot).Shrink(0)
 		}
-		choiceID := a.modelMenuChat
-		if choiceID == "" {
-			choiceID = chatID
-		}
-		finish := func(picked bool) {
-			if !picked {
-				a.modelMenuChat = chatID
-			} else {
-				a.modelMenuChat = ""
+		// The provider run does not shrink. Only the model name ellipsizes,
+		// so a narrow button keeps "OpenCode ·" and cuts deepseek-v4.1.
+		ui.Row(c).Gap(0).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
+			if provider != "" {
+				controlText(c, provider, 12, 0, 500, p.TextPrimary).Shrink(0)
+				controlText(c, " ·", 12, 0, 500, p.TextTertiary).Shrink(0)
+				controlText(c, " "+model, 12, 0, 500, p.TextPrimary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
+				return
 			}
-		}
-		listed := false
-		prev := ""
-		picked := false
-		opts := a.menuModels()
-		if len(opts) == 0 {
-			if m.Item("Add a provider…").Chosen() {
-				picked = true
-				a.openProviderSettings()
-			}
-			finish(picked)
-			return
-		}
-		for _, opt := range opts {
-			if opt.connID != prev {
-				if prev != "" {
-					m.Separator()
-				}
-				// MyGo menus have no section header. A disabled item is the
-				// provider name; the rows under it are the model id only.
-				m.Item(opt.provider).Disabled(true)
-				prev = opt.connID
-			}
-			// The item stores the catalog id. shortModel is only the chip.
-			// A qualified id and the bare name are not the same row.
-			on := modelChosen(cfg, opt.connID, opt.model)
-			if on {
-				listed = true
-			}
-			opt := opt
-			if m.Item(opt.model).Checked(on).Chosen() {
-				picked = true
-				a.useModelChat(choiceID, opt.connID, opt.model)
-			}
-		}
-		if !listed && strings.TrimSpace(cfg.Model) != "" {
-			m.Item(strings.TrimSpace(cfg.Model) + " (unavailable)").Checked(true).Disabled(true)
-		}
-		m.Separator()
-		if m.Item("Models & Providers…").Chosen() {
-			picked = true
-			a.openProviderSettings()
-		}
-		finish(picked)
+			controlText(c, model, 12, 0, 500, p.TextPrimary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
+		})
+		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 	})
+	return a.tip(c, b, "Model")
+}
+
+// modelMenuPopup is the composer model list. A native menu anchored its
+// top at the chip, and the chip sits on the bottom edge of the window, so
+// a list of ~90 models collapsed to the sliver of screen under the chip
+// and showed only its last row. This popup uses whichever side of the
+// chip has more room, caps that room, and scrolls.
+func (a *App) modelMenuPopup(c *ui.Context, sel ui.SelectParts[string], anchor ui.Element, cfg Config) {
+	p := a.look
+	_, winH := c.Size()
+	limit := modelMenuLimit(anchor, winH)
+	sel.Popup(func(panel ui.Element) {
+		panel.Padding(0).Gap(0).Margin(4, 0, 0, 0).MinWidth(220).MaxWidth(420).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).Clip().Label("model menu")
+		panel.Shadow(0, 8, 24, 0, p.ShadowMd)
+		ui.Scroll(c).FillWidth().MaxHeight(limit).Padding(5).Gap(0).Children(func() {
+			opts := a.menuModels()
+			if len(opts) == 0 {
+				a.modelMenuAction(c, sel, "Add a provider…", modelMenuAdd)
+				return
+			}
+			listed := false
+			prev := ""
+			for _, opt := range opts {
+				if opt.connID != prev {
+					if prev != "" {
+						a.modelMenuSep(c)
+					}
+					a.modelMenuHeader(c, opt)
+					prev = opt.connID
+				}
+				on := modelChosen(cfg, opt.connID, opt.model)
+				if on {
+					listed = true
+				}
+				a.modelMenuRow(c, sel, opt.provider, opt.model, modelChoiceID(opt.connID, opt.model), true, on)
+			}
+			if !listed && strings.TrimSpace(cfg.Model) != "" {
+				a.modelMenuUnavailable(c, cfg)
+			}
+			a.modelMenuSep(c)
+			a.modelMenuAction(c, sel, "Models & Providers…", modelMenuSettings)
+		})
+	})
+}
+
+func (a *App) applyModelMenuChoice(chatID, pick string) {
+	switch pick {
+	case modelMenuSettings, modelMenuAdd:
+		a.openProviderSettings()
+	default:
+		if connID, model, ok := parseModelChoiceID(pick); ok {
+			a.useModelChat(chatID, connID, model)
+		}
+	}
+}
+
+// modelMenuLimit is the popup's scrollport: the larger gap around the
+// chip, inside the window, and never taller than modelMenuMaxH.
+func modelMenuLimit(anchor ui.Element, winH float32) float32 {
+	const (
+		edge = float32(8)
+		gap  = float32(12) // margin, border, and the window's own edge
+		minH = float32(32)
+	)
+	b := anchor.Bounds()
+	if b.H < 1 || winH < 1 {
+		return modelMenuMaxH
+	}
+	below := winH - (b.Y + b.H) - edge
+	above := b.Y - edge
+	room := below
+	if above > below {
+		room = above
+	}
+	room -= gap
+	if room > modelMenuMaxH {
+		room = modelMenuMaxH
+	}
+	if room < minH {
+		room = minH
+	}
+	return room
+}
+
+func (a *App) modelMenuHeader(c *ui.Context, opt menuModel) {
+	p := a.look
+	ui.Row(c).Height(22).FillWidth().Gap(6).Padding(0, 8).AlignItems(ui.Center).Label(modelMenuMark("header", opt.provider, "", false, false, false)).Children(func() {
+		ui.Box(c).Size(6, 6).Radius(3).Background(a.connectionColor(a.connByID(opt.connID))).Shrink(0)
+		ui.Text(c, opt.provider).FontSize(12).FontWeight(600).TextColor(p.TextSecondary).SingleLine().Ellipsis("…")
+	})
+}
+
+func (a *App) modelMenuSep(c *ui.Context) {
+	p := a.look
+	ui.Box(c).Height(1).FillWidth().Margin(4, 8).Background(p.SeparatorDefault).Label(modelMenuMark("sep", "", "", false, false, false))
+}
+
+func (a *App) modelMenuUnavailable(c *ui.Context, cfg Config) {
+	p := a.look
+	model := strings.TrimSpace(cfg.Model)
+	ui.Row(c).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center).Label(modelMenuMark("unavailable", "", model, false, true, false)).Children(func() {
+		ui.Box(c).Size(12, 12).Shrink(0).Children(func() {
+			ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.TextTertiary)
+		})
+		controlText(c, model+" (unavailable)", 13, 0, 400, p.TextTertiary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
+	})
+}
+
+func (a *App) modelMenuAction(c *ui.Context, sel ui.SelectParts[string], title, value string) {
+	a.modelMenuRow(c, sel, "", title, value, true, false)
+}
+
+func (a *App) modelMenuRow(c *ui.Context, sel ui.SelectParts[string], provider, title, value string, enabled, checked bool) {
+	p := a.look
+	item := sel.Item(value).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+	fg := p.TextPrimary
+	if item.Highlighted() {
+		item.Background(p.AccentDefault)
+		fg = p.TextOnAccent
+	}
+	kind := "model"
+	if value == modelMenuSettings || value == modelMenuAdd {
+		kind = "action"
+	}
+	item.Label(modelMenuMark(kind, provider, title, enabled, checked, item.Highlighted()))
+	item.Children(func() {
+		slot := ui.Box(c).Size(12, 12).Shrink(0)
+		if checked {
+			slot.Children(func() {
+				ui.Icon(c, iconCheck).Size(12, 12).TextColor(fg)
+			})
+		}
+		controlText(c, title, 13, 0, 400, fg).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
+	})
+}
+
+// modelMenuMark identifies one popup row for tests. The fields are kind,
+// provider, model or action title, enabled, checked, and highlighted.
+func modelMenuMark(kind, provider, model string, enabled, checked, hot bool) string {
+	bit := func(v bool) string {
+		if v {
+			return "1"
+		}
+		return "0"
+	}
+	return strings.Join([]string{"model-menu-row", kind, provider, model, bit(enabled), bit(checked), bit(hot)}, "\x1f")
 }
 
 func (a *App) transcript(c *ui.Context, conv *Conversation) {
@@ -2004,38 +2170,6 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation) ui.Element {
 		return a.tip(c, b, "This model doesn't support reasoning effort.")
 	}
 	return a.tip(c, b, "Reasoning effort for this chat")
-}
-
-func (a *App) chipMenu(c *ui.Context, provider, model, a11y string, dot ui.Color, disabled bool, build func(m *ui.Menu)) ui.Element {
-	p := a.look
-	b := ui.ButtonBase(c).Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Background(p.ControlBg).Border(1, p.ControlBorder).Label(a11y).Cursor(ui.CursorPointer).MaxWidth(180).MinWidth(0)
-	switch {
-	case b.Pressed():
-		b.Background(p.FillPressed)
-	case b.Hovered():
-		b.Background(p.FillHover)
-	}
-	if !disabled {
-		b.Menu(build)
-	}
-	b.Children(func() {
-		if dot.A > 0 {
-			ui.Box(c).Size(6, 6).Radius(3).Background(dot).Shrink(0)
-		}
-		// The provider run does not shrink. Only the model name ellipsizes,
-		// so a narrow button keeps "OpenCode ·" and cuts deepseek-v4.1.
-		ui.Row(c).Gap(0).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
-			if provider != "" {
-				controlText(c, provider, 12, 0, 500, p.TextPrimary).Shrink(0)
-				controlText(c, " ·", 12, 0, 500, p.TextTertiary).Shrink(0)
-				controlText(c, " "+model, 12, 0, 500, p.TextPrimary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
-				return
-			}
-			controlText(c, model, 12, 0, 500, p.TextPrimary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
-		})
-		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
-	})
-	return b
 }
 
 func (a *App) roundButton(c *ui.Context, label string, glyph *ui.SVG, primary, disabled bool) ui.Element {

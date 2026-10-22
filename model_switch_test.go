@@ -152,7 +152,7 @@ func TestModelSwitchPersistsAcrossProviders(t *testing.T) {
 		t.Fatalf("checkmark after %+v", rows)
 	}
 	writeMenuBoard(t, rows, "menu-after.png")
-	tt.CloseMenu()
+	closeModelMenu(t, tt)
 
 	focusDraft(t, tt)
 	tt.Type("next turn")

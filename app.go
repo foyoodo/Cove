@@ -53,9 +53,11 @@ type App struct {
 	// modelMenuChat is the chat whose model menu is open. The choice is
 	// delivered on a later frame, which may already be showing another chat.
 	// It is recorded when the menu opens and read only for that choice.
-	// Check marks follow the button on screen, so a menu dismissed without
-	// a choice cannot leave the next chat's menu showing the previous one.
+	// Check marks follow that chat, so a menu dismissed without a choice
+	// cannot leave the next chat's menu showing the previous one.
 	modelMenuChat string
+	// modelMenuSeen is set during the frame while that popup is open.
+	modelMenuSeen bool
 	// addProviderNote is the chat showing "Add a provider to start chatting."
 	addProviderNote string
 	settingsQuery   string

@@ -201,7 +201,7 @@ func TestModelMenuGroupsUnderProvider(t *testing.T) {
 	if err := tt.Click("Model OpenAI 2 · gpt-4o"); err != nil {
 		t.Fatal(err)
 	}
-	got := tt.Menu()
+	got := modelMenuLabels(t, tt)
 	want := []string{
 		"OpenAI", "gpt-4o", "gpt-4o-mini", "-",
 		"OpenAI 2", "gpt-4o", "gpt-4o-mini", "-",
@@ -603,32 +603,85 @@ type menuRow struct {
 	label       string
 	checked, on bool
 	separator   bool
+	hot         bool
+	rect        ui.Rect
 }
 
-// menuRows is the open menu in order. A provider header is a disabled
-// unchecked item. Model rows under it are enabled. on is Enabled.
-func menuRows(t *testing.T, tt *ui.Tester) []menuRow {
+// modelMenuOpen reports whether the composer model popup is on screen.
+func modelMenuOpen(tt *ui.Tester) bool {
+	_, ok := tt.Find("model menu")
+	return ok
+}
+
+// closeModelMenu dismisses the composer model popup.
+func closeModelMenu(t *testing.T, tt *ui.Tester) {
 	t.Helper()
-	items := openMenuItems(t, tt)
-	var out []menuRow
-	for i := 0; i < items.Len(); i++ {
-		it := items.Index(i)
-		if it.Kind() == reflect.Pointer {
-			if it.IsNil() {
-				continue
-			}
-			it = it.Elem()
+	if !modelMenuOpen(tt) {
+		return
+	}
+	tt.Key(0, ui.KeyEscape)
+	if modelMenuOpen(tt) {
+		tt.ClickAt(8, 8)
+	}
+	if modelMenuOpen(tt) {
+		t.Fatal("model menu stayed open")
+	}
+}
+
+// modelMenuLabels is the open popup in order, "-" for a separator.
+func modelMenuLabels(t *testing.T, tt *ui.Tester) []string {
+	t.Helper()
+	rows := menuRows(t, tt)
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.separator {
+			out = append(out, "-")
+			continue
 		}
-		label := it.FieldByName("Label").String()
-		sep := label == ""
-		out = append(out, menuRow{
-			label:     label,
-			checked:   it.FieldByName("Checked").Bool(),
-			on:        it.FieldByName("Enabled").Bool(),
-			separator: sep,
-		})
+		out = append(out, r.label)
 	}
 	return out
+}
+
+// menuRows is the open popup in order. A provider header is a disabled
+// unchecked row. Model rows under it are enabled. on is whether the row
+// can be chosen.
+func menuRows(t *testing.T, tt *ui.Tester) []menuRow {
+	t.Helper()
+	if !modelMenuOpen(tt) {
+		t.Fatal("menu is not open")
+	}
+	var out []menuRow
+	for _, lab := range menuLabels(t, tt) {
+		kind, provider, model, enabled, checked, hot, ok := parseModelMenuMark(lab.text)
+		if !ok {
+			continue
+		}
+		row := menuRow{checked: checked, on: enabled, hot: hot, rect: lab.r}
+		switch kind {
+		case "sep":
+			row.separator = true
+		case "header":
+			row.label = provider
+		case "unavailable":
+			row.label = model + " (unavailable)"
+		default:
+			row.label = model
+		}
+		out = append(out, row)
+	}
+	if len(out) == 0 {
+		t.Fatal("model menu has no rows")
+	}
+	return out
+}
+
+func parseModelMenuMark(s string) (kind, provider, model string, enabled, checked, hot, ok bool) {
+	parts := strings.Split(s, "\x1f")
+	if len(parts) != 7 || parts[0] != "model-menu-row" {
+		return "", "", "", false, false, false, false
+	}
+	return parts[1], parts[2], parts[3], parts[4] == "1", parts[5] == "1", parts[6] == "1", true
 }
 
 // modelChecked reports the check on the model row under a provider header.
@@ -675,65 +728,54 @@ func headerRow(rows []menuRow, provider string) bool {
 // Two providers can list the same model id; the first label match is not enough.
 func chooseGroupedModel(t *testing.T, tt *ui.Tester, provider, model string) {
 	t.Helper()
-	h := testerHead(t, tt)
-	items := openMenuItems(t, tt)
-	group := ""
-	id := -1
-	for i := 0; i < items.Len(); i++ {
-		it := items.Index(i)
-		if it.Kind() == reflect.Pointer {
-			if it.IsNil() {
-				continue
-			}
-			it = it.Elem()
-		}
-		label := it.FieldByName("Label").String()
-		if label == "" {
+	var hit ui.Rect
+	found := false
+	for _, lab := range menuLabels(t, tt) {
+		kind, prov, id, enabled, _, _, ok := parseModelMenuMark(lab.text)
+		if !ok || kind != "model" || !enabled || prov != provider || id != model {
 			continue
 		}
-		enabled := it.FieldByName("Enabled").Bool()
-		checked := it.FieldByName("Checked").Bool()
-		if !enabled && !checked && !strings.HasSuffix(label, " (unavailable)") {
-			group = label
-			continue
-		}
-		if enabled && group == provider && label == model {
-			id = int(it.FieldByName("ID").Int())
-			break
-		}
+		hit = lab.r
+		found = true
+		break
 	}
-	if id < 0 {
-		t.Fatalf("menu has no %q under %q: %v", model, provider, tt.Menu())
+	if !found {
+		t.Fatalf("menu has no %q under %q: %v", model, provider, modelMenuLabels(t, tt))
 	}
-	chosen := reflectField(h, "chosen")
-	fn := chosen.Interface().(func(int))
-	menu := reflectField(h, "menu")
-	menu.Set(reflect.Zero(menu.Type()))
-	chosen.Set(reflect.Zero(chosen.Type()))
-	fn(id)
-	tt.Frame()
+	if hit.W < 1 || hit.H < 1 {
+		t.Fatalf("menu row %s / %s is not on screen (%+v)", provider, model, hit)
+	}
+	tt.ClickAt(hit.X+hit.W/2, hit.Y+hit.H/2)
 	for i := 0; i < 8 && tt.FramePending(); i++ {
 		tt.Frame()
 	}
 }
 
-func testerHead(t *testing.T, tt *ui.Tester) reflect.Value {
-	t.Helper()
-	h := reflectField(reflect.ValueOf(tt).Elem(), "h")
-	if h.Kind() == reflect.Pointer {
-		h = h.Elem()
-	}
-	if !h.IsValid() {
-		t.Fatal("tester has no headless state")
-	}
-	return h
+type menuLabel struct {
+	text string
+	r    ui.Rect
 }
 
-func openMenuItems(t *testing.T, tt *ui.Tester) reflect.Value {
+func menuLabels(t *testing.T, tt *ui.Tester) []menuLabel {
 	t.Helper()
-	menu := testerHead(t, tt).FieldByName("menu")
-	if !menu.IsValid() || menu.IsNil() {
-		t.Fatal("menu is not open")
+	rt := reflectField(reflect.ValueOf(tt).Elem(), "rt")
+	if rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
 	}
-	return menu.Elem().FieldByName("Items")
+	labels := reflectField(rt, "labels")
+	out := make([]menuLabel, 0, labels.Len())
+	for i := 0; i < labels.Len(); i++ {
+		n := labels.Index(i)
+		r := n.FieldByName("r")
+		out = append(out, menuLabel{
+			text: n.FieldByName("text").String(),
+			r: ui.Rect{
+				X: float32(r.FieldByName("X").Float()),
+				Y: float32(r.FieldByName("Y").Float()),
+				W: float32(r.FieldByName("W").Float()),
+				H: float32(r.FieldByName("H").Float()),
+			},
+		})
+	}
+	return out
 }
