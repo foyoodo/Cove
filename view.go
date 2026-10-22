@@ -880,11 +880,11 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 	a.bindPopover(c, "title-more", anchor, popSpec{
 		Name: "More",
 		Items: []popEntry{
-			{Kind: popItem, ID: "settings", Text: "Chat Settings…"},
-			{Kind: popItem, ID: "rename", Text: "Rename"},
-			{Kind: popItem, ID: "delete", Text: "Delete chat"},
+			{Kind: popItem, ID: "settings", Text: "Chat Settings…", MarkKind: "more", MarkModel: "Chat Settings…", MarkOn: true},
+			{Kind: popItem, ID: "rename", Text: "Rename", MarkKind: "more", MarkModel: "Rename", MarkOn: true},
+			{Kind: popItem, ID: "delete", Text: "Delete chat", MarkKind: "more", MarkModel: "Delete chat", MarkOn: true},
 			{Kind: popSep},
-			{Kind: popItem, ID: "request", Text: "Last request"},
+			{Kind: popItem, ID: "request", Text: "Last request", MarkKind: "more", MarkModel: "Last request", MarkOn: true},
 		},
 		OnSelect: func(id string) {
 			switch id {

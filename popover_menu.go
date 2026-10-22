@@ -123,6 +123,14 @@ type popoverState struct {
 	animAt        time.Time
 	announced     bool
 	currentID     string
+	// keyboardOpen is set when Space, Return, or Down on the focused
+	// anchor opens the menu. A pointer click leaves it false.
+	keyboardOpen bool
+	// pendingKey is the keyboard open, noticed before the frame builds.
+	pendingKey bool
+	// opened is set after the first paint chooses the initial highlight,
+	// so a later filter change is not treated as a fresh open.
+	opened bool
 	// selN is how many selectable rows the last frame built, so a key
 	// that arrives before the next build still knows where it can land.
 	selN int
@@ -140,16 +148,17 @@ func (a *App) popoverState(key string) *popoverState {
 	return st
 }
 
-func (st *popoverState) reset(c *ui.Context) {
+func (st *popoverState) reset(c *ui.Context, keyboard bool) {
 	w, h := c.Size()
 	*st = popoverState{
-		open:       true,
-		wasOpen:    true,
-		hi:         -1,
-		needScroll: true,
-		animAt:     c.Now(),
-		winW:       w,
-		winH:       h,
+		open:         true,
+		wasOpen:      true,
+		hi:           -1,
+		needScroll:   true,
+		animAt:       c.Now(),
+		winW:         w,
+		winH:         h,
+		keyboardOpen: keyboard,
 	}
 }
 
@@ -162,14 +171,31 @@ func (a *App) bindPopover(c *ui.Context, key string, anchor ui.Element, spec pop
 	}
 	st := a.popoverState(key)
 	anchor.Expanded(st.open)
-	if anchor.Clicked() && !st.open {
+	// Space, Return, and Down open from the keyboard while the anchor is
+	// focused. They are taken here so the button's own click does not also
+	// run, and so a menu with no current item can highlight its first row.
+	// A pointer click still arrives as Clicked.
+	anchor.HandleInput(func(ev ui.InputEvent) bool {
+		if st.open || ev.Kind != ui.InputKeyDown || ev.Mods != 0 {
+			return false
+		}
+		switch ev.Key {
+		case ui.KeyEnter, ui.KeySpace, ui.KeyDown:
+			st.pendingKey = true
+			return true
+		}
+		return false
+	})
+	if !st.open && (anchor.Clicked() || st.pendingKey) {
+		keyboard := st.pendingKey
+		st.pendingKey = false
 		for k, other := range a.popovers {
 			if k != key && other.open {
 				other.open = false
 				other.closing = false
 			}
 		}
-		st.reset(c)
+		st.reset(c, keyboard)
 	}
 	if st.open {
 		a.paintPopover(c, anchor, st, spec)
@@ -238,14 +264,25 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 	}
 	sig := popSig(visible)
 	if sig != st.sig {
+		opening := !st.opened
+		st.opened = true
 		st.sig = sig
 		st.currentID = checkedPopID(items)
-		if empty {
+		switch {
+		case empty:
 			st.hi = -1
-		} else {
+		case st.currentID != "":
+			// A current item keeps the highlight, whether the menu was
+			// opened by the pointer or the keyboard.
 			st.hi = popHighlight(visible, st.currentID)
+		case opening && !st.keyboardOpen:
+			// Pointer open, nothing checked: no highlight until hover or arrows.
+			st.hi = -1
+		default:
+			st.hi = 0
 		}
-		st.needScroll = true
+		st.keyboardOpen = false
+		st.needScroll = st.hi >= 0
 	}
 	sel := selectable(visible)
 	footerSel := selectable(spec.Footer)
@@ -861,9 +898,12 @@ func placeMenu(anchor ui.Rect, width, height, winW, winH float32, up bool, limit
 	if width < 1 {
 		width = menuMinW
 	}
+	// Left edges first. If that would sit closer than 8pt to the window's
+	// right edge, align the right edges instead. Clamp to the 8pt margin
+	// only when right-aligning still leaves the left edge outside it.
 	x := anchor.X
 	if x+width > winW-menuWindowMargin {
-		x = winW - menuWindowMargin - width
+		x = anchor.X + anchor.W - width
 	}
 	if x < menuWindowMargin {
 		x = menuWindowMargin
@@ -994,10 +1034,12 @@ func movePop(n, hi, delta int) int {
 		return -1
 	}
 	if hi < 0 {
+		// Nothing highlighted yet. Down enters on the first enabled row,
+		// Up on the last, as a macOS menu does.
 		if delta > 0 {
-			return 0
+			return min(delta-1, n-1)
 		}
-		return 0
+		return max(n+delta, 0)
 	}
 	hi += delta
 	if hi < 0 {

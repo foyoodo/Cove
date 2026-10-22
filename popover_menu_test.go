@@ -113,6 +113,34 @@ func TestPopoverPlaceAndWidth(t *testing.T) {
 	if w := menuWidth(800, 240); w != menuMaxW {
 		t.Fatalf("clamped width %v", w)
 	}
+
+	// Left edges align when the menu fits.
+	left := ui.Rect{X: 40, Y: 400, W: 120, H: 22}
+	box := placeMenu(left, 180, 80, 720, 520, true, 360)
+	if box.X != left.X {
+		t.Fatalf("left-aligned menu x %.1f, anchor %.1f", box.X, left.X)
+	}
+
+	// Anchor near the right edge: align the menu's right edge with the
+	// anchor's, the way Settings › Reasoning and the title-bar More button do.
+	right := ui.Rect{X: 980, Y: 40, W: 120, H: 22}
+	box = placeMenu(right, 180, 160, 1120, 760, false, 360)
+	if box.X+box.W != right.X+right.W {
+		t.Fatalf("right-aligned menu right %.1f, anchor right %.1f", box.X+box.W, right.X+right.W)
+	}
+	if box.X < menuWindowMargin {
+		t.Fatalf("right-aligned menu crossed the left margin: %.1f", box.X)
+	}
+
+	// Neither edge can stay on the anchor and inside the window.
+	wide := ui.Rect{X: 4, Y: 40, W: 190, H: 22}
+	box = placeMenu(wide, 180, 80, 200, 400, false, 360)
+	if box.X != menuWindowMargin {
+		t.Fatalf("clamped menu x %.1f, want %v", box.X, menuWindowMargin)
+	}
+	if box.X+box.W > 200-menuWindowMargin+0.1 {
+		t.Fatalf("clamped menu right %.1f", box.X+box.W)
+	}
 }
 
 func TestPopoverFilterHighlightAndKeys(t *testing.T) {
@@ -438,6 +466,109 @@ func TestPopoverAccessibility(t *testing.T) {
 	}
 }
 
+func TestPopoverOpenHighlight(t *testing.T) {
+	a := menuProtoApp(t)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+
+	// Pointer open of a menu with no current item: nothing is highlighted.
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "" {
+		t.Fatalf("mouse-opened More highlighted %q", hot.label)
+	}
+	tt.Key(0, ui.KeyDown)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {
+		t.Fatalf("first Down %+v", hot)
+	}
+	tt.Key(0, ui.KeyEscape)
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyUp)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Last request" {
+		t.Fatalf("first Up %+v", hot)
+	}
+	// Return while nothing is highlighted does not choose.
+	tt.Key(0, ui.KeyEscape)
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if !moreOpen(tt) {
+		t.Fatal("Return with no highlight closed More")
+	}
+	if a.modalOpen || a.settingsOpen {
+		t.Fatal("Return with no highlight selected Chat Settings")
+	}
+	tt.Key(0, ui.KeyEscape)
+
+	// Keyboard open (anchor focused, then Down or Space) highlights the first row.
+	if !tt.Focused("More") {
+		t.Fatal("Esc did not return focus to More")
+	}
+	tt.Key(0, ui.KeyDown)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {
+		t.Fatalf("Down-opened More %+v", hot)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Key(0, ui.KeySpace)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {
+		t.Fatalf("Space-opened More %+v", hot)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Key(0, ui.KeyEnter)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {
+		t.Fatalf("Return-opened More %+v", hot)
+	}
+	tt.Key(0, ui.KeyEscape)
+
+	// A menu with a current item still opens on that item.
+	openModelMenu(t, tt)
+	if hot := hotLabeled(menuRows(t, tt)); hot.label != "claude-sonnet-4.5" || !hot.checked {
+		t.Fatalf("model menu highlight %+v", hot)
+	}
+}
+
+func TestPopoverAnchorEdge(t *testing.T) {
+	a := menuProtoApp(t)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	more := mustFind(t, tt, "More")
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	menu := tallestLabel(t, tt, "More")
+	if menu.H < 40 {
+		t.Fatal("More menu did not open")
+	}
+	if abs32(menu.X+menu.W-(more.X+more.W)) > 1.5 {
+		t.Fatalf("More menu right %.1f, button right %.1f (left %.1f vs %.1f)", menu.X+menu.W, more.X+more.W, menu.X, more.X)
+	}
+	tt.Key(0, ui.KeyEscape)
+
+	// On a 720-wide window the Reasoning control sits against the card's
+	// right edge, so a left-aligned menu would cross the window margin.
+	b := menuProtoApp(t)
+	tb := ui.NewTester(b.view, 720, 520)
+	tb.Frame()
+	b.settingsOpen = true
+	b.settingsSection = "general"
+	tb.Frame()
+	btn := rightmostLabel(t, tb, "Reasoning")
+	if err := tb.Click("Medium"); err != nil {
+		t.Fatal(err)
+	}
+	menu = tallestLabel(t, tb, "Reasoning")
+	if menu.H < 40 {
+		t.Fatal("reasoning menu did not open")
+	}
+	if abs32(menu.X+menu.W-(btn.X+btn.W)) > 1.5 {
+		t.Fatalf("reasoning menu right %.1f, button right %.1f", menu.X+menu.W, btn.X+btn.W)
+	}
+}
+
 func TestPopoverScreenshots(t *testing.T) {
 	dir := testArtifactDir(t, "popover-menu")
 	shots := []struct {
@@ -605,18 +736,63 @@ func protoConn(id, name, kind, base string, models ...string) Connection {
 
 func effortMarks(t *testing.T, tt *ui.Tester) []menuRow {
 	t.Helper()
+	return kindMarks(t, tt, "effort")
+}
+
+func kindMarks(t *testing.T, tt *ui.Tester, kind string) []menuRow {
+	t.Helper()
 	var out []menuRow
 	for _, lab := range menuLabels(t, tt) {
-		kind, _, model, enabled, checked, hot, ok := parseModelMenuMark(lab.text)
-		if !ok || kind != "effort" {
+		got, _, model, enabled, checked, hot, ok := parseModelMenuMark(lab.text)
+		if !ok || got != kind {
 			continue
 		}
 		out = append(out, menuRow{label: model, on: enabled, checked: checked, hot: hot, rect: lab.r})
 	}
-	if len(out) == 0 {
-		t.Fatal("effort menu has no rows")
-	}
 	return out
+}
+
+func moreOpen(tt *ui.Tester) bool {
+	_, ok := tt.Find("Chat Settings…")
+	return ok
+}
+
+func tallestLabel(t *testing.T, tt *ui.Tester, s string) ui.Rect {
+	t.Helper()
+	var best ui.Rect
+	var found bool
+	for _, lab := range menuLabels(t, tt) {
+		if lab.text != s {
+			continue
+		}
+		if !found || lab.r.H > best.H {
+			best = lab.r
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no label %q", s)
+	}
+	return best
+}
+
+func rightmostLabel(t *testing.T, tt *ui.Tester, s string) ui.Rect {
+	t.Helper()
+	var best ui.Rect
+	var found bool
+	for _, lab := range menuLabels(t, tt) {
+		if lab.text != s || lab.r.W < 1 {
+			continue
+		}
+		if !found || lab.r.X > best.X {
+			best = lab.r
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no label %q", s)
+	}
+	return best
 }
 
 func effortOpen(tt *ui.Tester) bool {
