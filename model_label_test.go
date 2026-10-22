@@ -135,7 +135,7 @@ func TestComposerModelButtonShots(t *testing.T) {
 		if on, ok := modelChecked(rows, "Relay", model); !ok || on {
 			t.Fatalf("relay check %+v", rows)
 		}
-		dt.CloseMenu()
+		closeModelMenu(t, dt)
 		saveModelButton(t, dt, "Model OpenCode · "+model, "dup-"+mode+".png")
 	}
 
