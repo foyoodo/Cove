@@ -415,7 +415,7 @@ func TestEditResendStampsModelUsed(t *testing.T) {
 
 func TestMessageModelCrops(t *testing.T) {
 	a := messageModelScene(t)
-	dir := "/cursor/stores/self/artifacts/msg-model"
+	dir := testArtifactDir(t, "msg-model")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -84,7 +84,7 @@ func TestContentCardShadowContained(t *testing.T) {
 }
 
 func TestContentCardShadowShots(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/shadows-all"
+	dir := testArtifactDir(t, "shadows-all")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

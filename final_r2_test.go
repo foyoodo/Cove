@@ -236,7 +236,7 @@ func TestNoProviderDotIsTertiary(t *testing.T) {
 }
 
 func TestFinalR3NoProviderCrop(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/final-r3"
+	dir := testArtifactDir(t, "final-r3")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func noProviderDotsApp(t *testing.T) *App {
 }
 
 func TestFinalR2Crops(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/final-r2"
+	dir := testArtifactDir(t, "final-r2")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

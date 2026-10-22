@@ -253,7 +253,7 @@ func TestSidebarResizeDoubleClick(t *testing.T) {
 }
 
 func TestSidebarResizeFrames(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "sidebar-resize")
+	dir := testArtifactDir(t, "sidebar-resize")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ Frames, light and dark: artifacts/sidebar-resize/drag-wide-{light,dark}-0-before
 
 Tests: TestSidebarResizeDrag, TestSidebarResizeClamps, TestSidebarResizeNarrowWindow, TestSidebarResizeDoubleClick, TestSidebarResizeFrames.
 `
-	path := "/opt/cursor/artifacts/perf/after.txt"
+	path := filepath.Join(testArtifactDir(t, "perf"), "after.txt")
 	raw, err := os.ReadFile(path)
 	body := ""
 	if err == nil {

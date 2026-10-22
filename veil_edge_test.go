@@ -117,7 +117,7 @@ func TestVeilMidSwitchMatchesScreen(t *testing.T) {
 }
 
 func TestVeilEdgeShots(t *testing.T) {
-	dir := "/opt/cursor/artifacts/veil-edges"
+	dir := testArtifactDir(t, "veil-edges")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

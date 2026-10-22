@@ -481,11 +481,11 @@ func TestFindLongChatJumpCentersEarliest(t *testing.T) {
 // stroke used to be shaped in the body font, so a monospace prefix slid it
 // about 12pt left of the fill.
 func TestFindRingMatchesFill(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/find-r3"
+	dir := testArtifactDir(t, "find-r3")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r4 := "/cursor/stores/self/artifacts/find-r4"
+	r4 := testArtifactDir(t, "find-r4")
 	if err := os.MkdirAll(r4, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -38,7 +38,7 @@ func TestSidebarSeparatorPixels(t *testing.T) {
 }
 
 func TestUISnapshots(t *testing.T) {
-	dir := "/opt/cursor/artifacts"
+	dir := testArtifactDir(t, "")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1040,7 +1040,7 @@ func TestCardCornerPixels(t *testing.T) {
 		Messages: msgs,
 	}}
 	a.data.ActiveID = "c1"
-	dir := "/opt/cursor/artifacts"
+	dir := testArtifactDir(t, "")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,33 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The UI font on the development machine is Noto Sans (system-ui),
+      # with DejaVu Sans for symbols such as ↵ and WenQuanYi Micro Hei for
+      # Han. Ubuntu otherwise prefers Cantarell for system-ui, which changes
+      # the measurements these tests check.
+      - name: Install UI fonts
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-core \
+            fonts-dejavu-core \
+            fonts-dejavu-mono \
+            fonts-wqy-microhei
+          sudo tee /etc/fonts/conf.d/99-cove-system-ui.conf >/dev/null <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <match>
+              <test name="family" compare="eq"><string>system-ui</string></test>
+              <edit name="family" mode="assign" binding="strong"><string>Noto Sans</string></edit>
+            </match>
+          </fontconfig>
+          EOF
+          fc-cache -f
+          fc-match system-ui
+          fc-match sans-serif
+
       - name: Test
         # The main package takes several minutes; the default 10m limit is close.
         run: go test -timeout 20m ./...

@@ -25,8 +25,8 @@ const revisionDesign = "/cursor/stores/self/design-v07-r3"
 // the design PNG. Design files are 2×, so the tester uses half their pixel
 // size. Every page is also saved at the 720×520 minimum.
 func TestRevisionScreens(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "r2")
-	qaDir := filepath.Join("/opt/cursor/artifacts", "qa")
+	dir := testArtifactDir(t, "r2")
+	qaDir := testArtifactDir(t, "qa")
 	minDir := filepath.Join(dir, "min")
 	for _, d := range []string{dir, qaDir, minDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -546,7 +546,7 @@ func themeBoard(t *testing.T, dark bool) image.Image {
 // TestThinkingCollapseShots saves frames of a long thread while Thinking
 // collapses and expands, plus the reply's y at each frame.
 func TestThinkingCollapseShots(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "thinking")
+	dir := testArtifactDir(t, "thinking")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

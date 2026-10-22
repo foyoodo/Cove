@@ -14,7 +14,7 @@ import (
 )
 
 func TestQuoteVisuals(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/quote"
+	dir := testArtifactDir(t, "quote")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestQuoteVisuals(t *testing.T) {
 }
 
 func TestQuoteBarHintMeasure(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/quote"
+	dir := testArtifactDir(t, "quote")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

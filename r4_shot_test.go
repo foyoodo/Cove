@@ -12,7 +12,7 @@ import (
 // TestR4Screens renders the Models & Providers redesign, General › New
 // chats, and the edit-resend hint, then lays each one beside the design.
 func TestR4Screens(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "r4")
+	dir := testArtifactDir(t, "r4")
 	if err := os.MkdirAll(filepath.Join(dir, "min"), 0o755); err != nil {
 		t.Fatal(err)
 	}

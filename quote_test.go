@@ -306,7 +306,7 @@ func TestQuoteCardWrapsAtWidth(t *testing.T) {
 	if !ok || card.H != 55 {
 		t.Fatalf("720 crop card %+v", card)
 	}
-	dir := "/cursor/stores/self/artifacts/quote"
+	dir := testArtifactDir(t, "quote")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +414,7 @@ func TestQuoteBubbleFitsColumn(t *testing.T) {
 	// One paragraph long enough to need more than two lines in the bubble.
 	text := strings.Repeat("The quoted sentence keeps going past the column. ", 8)
 	q := Quote{Text: text, Src: "Cove", Time: when, SourceMessageID: "a1"}
-	dir := "/cursor/stores/self/artifacts/quote"
+	dir := testArtifactDir(t, "quote")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1237,7 +1237,7 @@ func TestQuoteCloseInk(t *testing.T) {
 }
 
 func TestQuoteCloseCrops(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/quote-close-v2"
+	dir := testArtifactDir(t, "quote-close-v2")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1661,7 +1661,7 @@ func TestQuoteRequestBodyAndEditRegenerate(t *testing.T) {
 	if strings.Count(content, "\n") < 3 {
 		t.Fatal("quote was truncated below 3 lines")
 	}
-	dir := filepath.Join("/cursor/stores/self/artifacts/quote")
+	dir := testArtifactDir(t, "quote")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

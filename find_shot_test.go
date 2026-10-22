@@ -11,7 +11,7 @@ import (
 )
 
 func TestFindScreenshots(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "find")
+	dir := testArtifactDir(t, "find")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFindScreenshots(t *testing.T) {
 // TestFindR2Shots writes the designer review of the field width and the
 // single-layer flash peak, light and dark, at 1120 and at the 720 minimum.
 func TestFindR2Shots(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/find-r2"
+	dir := testArtifactDir(t, "find-r2")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

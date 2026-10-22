@@ -694,7 +694,7 @@ func zoom4(src *image.RGBA) *image.RGBA {
 
 func saveThemePNG(t *testing.T, name string, img image.Image) {
 	t.Helper()
-	dir := "/opt/cursor/artifacts/theme-latency"
+	dir := testArtifactDir(t, "theme-latency")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1042,7 +1042,7 @@ func themeAttemptReport(samples []time.Duration) string {
 // created it first.
 func perfReportPath(t *testing.T) string {
 	t.Helper()
-	dir := "/opt/cursor/artifacts/perf"
+	dir := testArtifactDir(t, "perf")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

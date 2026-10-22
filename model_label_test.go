@@ -84,7 +84,7 @@ func TestComposerModelLabelRule(t *testing.T) {
 // shared name, and for a shared name that does not fit the 180pt button.
 // The provider run stays whole. The model run takes the ellipsis.
 func TestComposerModelButtonShots(t *testing.T) {
-	dir := "/opt/cursor/artifacts/model-switch"
+	dir := testArtifactDir(t, "model-switch")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func chipFixture(t *testing.T, conns []Connection, keys map[string]string, cfg C
 
 func saveModelButton(t *testing.T, tt *ui.Tester, a11y, name string) {
 	t.Helper()
-	dir := "/opt/cursor/artifacts/model-switch"
+	dir := testArtifactDir(t, "model-switch")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

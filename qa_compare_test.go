@@ -49,7 +49,7 @@ func TestQAMockupCompares(t *testing.T) {
 		add("min-window-"+mode+".png", "sidebar-resize", sidebarMinWindow(t, dark))
 	}
 	for _, s := range shots {
-		dir := filepath.Join("/opt/cursor/artifacts", s.dir)
+		dir := filepath.Join(testArtifactDir(t, ""), s.dir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
