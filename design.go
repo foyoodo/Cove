@@ -23,6 +23,7 @@ const (
 
 	radiusRow      = 6
 	radiusCode     = 8
+	radiusMenu     = 8 // radius/menu; same number as radius/code, its own token
 	radiusGroup    = 10
 	radiusCard     = 12 // hint strip, settings, dialogs
 	radiusBubble   = 14

@@ -217,8 +217,7 @@ func (a *App) maxContextControl(c *ui.Context, scope string, value int, set func
 	var focus ui.Element
 	row := ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0)
 	row.Children(func() {
-		sel := ui.SelectBase(c, &mode)
-		b := sel.Trigger
+		b := ui.ButtonBase(c.Key("max-context-" + scope))
 		b.Height(22).MinWidth(104).Gap(6).Padding(0, 7, 0, 9).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("Max context").Cursor(ui.CursorPointer)
 		b.Shadow(0, 0.5, 1, 0, p.ShadowMd)
 		if b.Pressed() {
@@ -230,35 +229,29 @@ func (a *App) maxContextControl(c *ui.Context, scope string, value int, set func
 			controlText(c, mode, 13, 0, 400, p.TextPrimary).Grow(1)
 			ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 		})
-		sel.Popup(func(panel ui.Element) {
-			panel.Padding(5).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(104)
-			panel.Shadow(0, 8, 24, 0, p.ShadowMd)
-			for _, opt := range []string{"Unlimited", "Limit to"} {
-				item := sel.Item(opt).Height(22).FillWidth().Padding(0, 8).Radius(4).AlignItems(ui.Center)
-				fg := p.TextPrimary
-				if item.Highlighted() {
-					item.Background(p.AccentDefault)
-					fg = p.TextOnAccent
-				}
-				item.Children(func() {
-					controlText(c, opt, 13, 0, 400, fg)
-				})
-			}
-		})
-		if b.Changed() {
-			switch {
-			case mode == "Limit to" && value <= 0:
-				value = a.recalledLimit(scope)
-				set(value)
-				a.roundsFocus = scope
-			case mode == "Unlimited" && value > 0:
-				a.rememberLimit(scope, value)
-				a.roundsScope = ""
-				a.roundsText = ""
-				value = 0
-				set(0)
-			}
+		var choices []popEntry
+		for _, opt := range []string{"Unlimited", "Limit to"} {
+			choices = append(choices, popEntry{
+				Kind: popItem, ID: opt, Text: opt, Checkable: true, Checked: opt == mode,
+			})
 		}
+		a.bindPopover(c, "max-context-"+scope, b, popSpec{
+			Name:  "Max context",
+			Items: choices,
+			OnSelect: func(id string) {
+				switch {
+				case id == "Limit to" && value <= 0:
+					value = a.recalledLimit(scope)
+					set(value)
+					a.roundsFocus = scope
+				case id == "Unlimited" && value > 0:
+					a.rememberLimit(scope, value)
+					a.roundsScope = ""
+					a.roundsText = ""
+					set(0)
+				}
+			},
+		})
 		if value <= 0 {
 			return
 		}

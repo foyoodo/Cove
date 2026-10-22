@@ -203,7 +203,7 @@ func TestModelMenuGroupsUnderProvider(t *testing.T) {
 	}
 	got := modelMenuLabels(t, tt)
 	want := []string{
-		"OpenAI", "gpt-4o", "gpt-4o-mini", "-",
+		"OpenAI", "gpt-4o", "gpt-4o-mini",
 		"OpenAI 2", "gpt-4o", "gpt-4o-mini", "-",
 		"Models & Providers…",
 	}
@@ -609,7 +609,7 @@ type menuRow struct {
 
 // modelMenuOpen reports whether the composer model popup is on screen.
 func modelMenuOpen(tt *ui.Tester) bool {
-	_, ok := tt.Find("model menu")
+	_, ok := tt.Find("Model")
 	return ok
 }
 

@@ -162,7 +162,7 @@ func TestSettingsTabsKeepDrafts(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := tt.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("Model"); err != nil {

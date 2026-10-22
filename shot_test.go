@@ -234,7 +234,7 @@ func TestUISnapshots(t *testing.T) {
 	if err := ts.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ts.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := ts.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if !ts.HasText("Last request") || ts.HasText("Appearance") {
@@ -252,7 +252,7 @@ func TestUISnapshots(t *testing.T) {
 	if err := td.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := td.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := td.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if err := td.Click("Model"); err != nil {
@@ -295,7 +295,7 @@ func TestUISnapshots(t *testing.T) {
 	if err := tsc.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tsc.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := tsc.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	scrolled.formScroll.Y = 1e9

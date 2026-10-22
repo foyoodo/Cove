@@ -199,7 +199,7 @@ func TestRenderDoesNotTouchCredentials(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := tt.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if keys.Gets("chat-conn") != 1 || keys.Gets("default-conn") != 1 {
@@ -233,7 +233,7 @@ func TestRenderDoesNotTouchCredentials(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := tt.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if keys.Gets("chat-conn") != 1 || keys.Gets("default-conn") != 1 {

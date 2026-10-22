@@ -84,6 +84,9 @@ func (a *App) rememberActivateFocus() {
 // number keeps the focus it had. Anything else, including a selection
 // in the message list, returns to the composer without moving the
 // list or clearing that selection.
+//
+// An in-window popover is not one of those edits. It closes when the
+// window resigns key, and becoming key again does not open it.
 func (a *App) applyWindowActivate() {
 	if a.activateByClick {
 		a.activateByClick = false

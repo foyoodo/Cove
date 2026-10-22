@@ -809,21 +809,8 @@ func (a *App) titleBar(c *ui.Context, conv *Conversation) {
 		if regen.Clicked() {
 			a.regenerate()
 		}
-		a.iconButton(c, "toolbar-more", "More", iconEllipsis).Menu(func(m *ui.Menu) {
-			if m.Item("Chat Settings…").Chosen() {
-				a.openSettings()
-			}
-			if m.Item("Rename").Chosen() {
-				a.beginRename()
-			}
-			if m.Item("Delete chat").Chosen() {
-				a.askDelete()
-			}
-			m.Separator()
-			if m.Item("Last request").Chosen() {
-				a.requestOpen = true
-			}
-		})
+		more := a.iconButton(c, "toolbar-more", "More", iconEllipsis)
+		a.moreMenu(c, more)
 	})
 }
 
@@ -882,10 +869,6 @@ func (a *App) providerChip(c *ui.Context, conv *Conversation) {
 	})
 }
 
-// modelMenuMaxH is the tallest the composer model popup grows, about
-// sixteen rows. A shorter gap above or below the chip uses that gap.
-const modelMenuMaxH float32 = 360
-
 // modelMenuSettings and modelMenuAdd are popup values for the trailing
 // action. They are not model ids.
 const (
@@ -893,7 +876,32 @@ const (
 	modelMenuAdd      = "\x1eadd"
 )
 
-func (a *App) modelMenu(c *ui.Context, conv *Conversation) ui.Element {
+func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
+	a.bindPopover(c, "title-more", anchor, popSpec{
+		Name: "More",
+		Items: []popEntry{
+			{Kind: popItem, ID: "settings", Text: "Chat Settings…"},
+			{Kind: popItem, ID: "rename", Text: "Rename"},
+			{Kind: popItem, ID: "delete", Text: "Delete chat"},
+			{Kind: popSep},
+			{Kind: popItem, ID: "request", Text: "Last request"},
+		},
+		OnSelect: func(id string) {
+			switch id {
+			case "settings":
+				a.openSettings()
+			case "rename":
+				a.beginRename()
+			case "delete":
+				a.askDelete()
+			case "request":
+				a.requestOpen = true
+			}
+		},
+	})
+}
+
+func (a *App) modelMenu(c *ui.Context, conv *Conversation, slot string) ui.Element {
 	p := a.look
 	chatID := ""
 	screen := Config{}
@@ -901,13 +909,7 @@ func (a *App) modelMenu(c *ui.Context, conv *Conversation) ui.Element {
 		chatID = conv.ID
 		screen = conv.Config
 	}
-	// SelectBase applies the opening click as it returns, so Open is
-	// already true on that pass. The value starts as the chat on screen
-	// and is retargeted to the chat that opened the popup before the
-	// rows are built.
-	pick := modelChoiceID(screen.ConnectionID, screen.Model)
-	sel := ui.SelectBase(c.Key("model-menu"), &pick)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("model-menu-" + slot))
 	b.Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Background(p.ControlBg).Border(1, p.ControlBorder).Cursor(ui.CursorPointer).MaxWidth(180).MinWidth(0)
 	switch {
 	case b.Pressed():
@@ -915,29 +917,43 @@ func (a *App) modelMenu(c *ui.Context, conv *Conversation) ui.Element {
 	case b.Hovered():
 		b.Background(p.FillHover)
 	}
-	if sel.Open() && a.modelMenuChat == "" {
-		a.modelMenuChat = chatID
-	}
 	ownerID := chatID
 	cfg := screen
-	if sel.Open() && a.modelMenuChat != "" {
+	st := a.popoverState("model-" + slot)
+	if st.open && a.modelMenuChat != "" {
 		ownerID = a.modelMenuChat
 		if shown := a.conversation(ownerID); shown != nil {
 			cfg = shown.Config
-			pick = modelChoiceID(cfg.ConnectionID, cfg.Model)
 		}
 	}
-	if sel.Open() {
-		a.modelMenuPopup(c, sel, b, cfg)
-	}
-	if b.Changed() {
-		a.applyModelMenuChoice(ownerID, pick)
-		if ownerID == chatID && conv != nil {
-			cfg = conv.Config
-			screen = conv.Config
+	if st.open {
+		a.modelMenuSeen = true
+		if a.modelMenuChat == "" {
+			a.modelMenuChat = chatID
 		}
 	}
-	if sel.Open() {
+	items, footer, search := a.modelMenuEntries(cfg)
+	a.bindPopover(c, "model-"+slot, b, popSpec{
+		Name:          "Model",
+		TestLabel:     "model menu",
+		Items:         items,
+		Footer:        footer,
+		FooterSepMark: modelMenuMark("sep", "", "", false, false, false),
+		Search:        search,
+		SearchPrompt:  "Search models",
+		ComposerFocus: true,
+		OnSelect: func(id string) {
+			if id == modelMenuSettings || id == modelMenuAdd {
+				st.focusComposer = false
+			}
+			target := chatID
+			if a.modelMenuChat != "" {
+				target = a.modelMenuChat
+			}
+			a.applyModelMenuChoice(target, id)
+		},
+	})
+	if st.open {
 		a.modelMenuSeen = true
 		if a.modelMenuChat == "" {
 			a.modelMenuChat = chatID
@@ -973,49 +989,6 @@ func (a *App) modelMenu(c *ui.Context, conv *Conversation) ui.Element {
 	return a.tip(c, b, "Model")
 }
 
-// modelMenuPopup is the composer model list. A native menu anchored its
-// top at the chip, and the chip sits on the bottom edge of the window, so
-// a list of ~90 models collapsed to the sliver of screen under the chip
-// and showed only its last row. This popup uses whichever side of the
-// chip has more room, caps that room, and scrolls.
-func (a *App) modelMenuPopup(c *ui.Context, sel ui.SelectParts[string], anchor ui.Element, cfg Config) {
-	p := a.look
-	_, winH := c.Size()
-	limit := modelMenuLimit(anchor, winH)
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(0).Gap(0).Margin(4, 0, 0, 0).MinWidth(220).MaxWidth(420).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).Clip().Label("model menu")
-		panel.Shadow(0, 8, 24, 0, p.ShadowMd)
-		ui.Scroll(c).FillWidth().MaxHeight(limit).Padding(5).Gap(0).Children(func() {
-			opts := a.menuModels()
-			if len(opts) == 0 {
-				a.modelMenuAction(c, sel, "Add a provider…", modelMenuAdd)
-				return
-			}
-			listed := false
-			prev := ""
-			for _, opt := range opts {
-				if opt.connID != prev {
-					if prev != "" {
-						a.modelMenuSep(c)
-					}
-					a.modelMenuHeader(c, opt)
-					prev = opt.connID
-				}
-				on := modelChosen(cfg, opt.connID, opt.model)
-				if on {
-					listed = true
-				}
-				a.modelMenuRow(c, sel, opt.provider, opt.model, modelChoiceID(opt.connID, opt.model), true, on)
-			}
-			if !listed && strings.TrimSpace(cfg.Model) != "" {
-				a.modelMenuUnavailable(c, cfg)
-			}
-			a.modelMenuSep(c)
-			a.modelMenuAction(c, sel, "Models & Providers…", modelMenuSettings)
-		})
-	})
-}
-
 func (a *App) applyModelMenuChoice(chatID, pick string) {
 	switch pick {
 	case modelMenuSettings, modelMenuAdd:
@@ -1027,84 +1000,64 @@ func (a *App) applyModelMenuChoice(chatID, pick string) {
 	}
 }
 
-// modelMenuLimit is the popup's scrollport: the larger gap around the
-// chip, inside the window, and never taller than modelMenuMaxH.
-func modelMenuLimit(anchor ui.Element, winH float32) float32 {
-	const (
-		edge = float32(8)
-		gap  = float32(12) // margin, border, and the window's own edge
-		minH = float32(32)
-	)
-	b := anchor.Bounds()
-	if b.H < 1 || winH < 1 {
-		return modelMenuMaxH
+// modelMenuEntries is the composer model menu: provider groups, then a
+// pinned Models & Providers… row. Search appears once 10 models are enabled.
+func (a *App) modelMenuEntries(cfg Config) (items, footer []popEntry, search bool) {
+	opts := a.menuModels()
+	if len(opts) == 0 {
+		items = []popEntry{{
+			Kind: popItem, ID: modelMenuAdd, Text: "Add a provider…",
+			MarkKind: "action", MarkModel: "Add a provider…", MarkOn: true,
+		}}
+		return items, nil, false
 	}
-	below := winH - (b.Y + b.H) - edge
-	above := b.Y - edge
-	room := below
-	if above > below {
-		room = above
-	}
-	room -= gap
-	if room > modelMenuMaxH {
-		room = modelMenuMaxH
-	}
-	if room < minH {
-		room = minH
-	}
-	return room
-}
-
-func (a *App) modelMenuHeader(c *ui.Context, opt menuModel) {
-	p := a.look
-	ui.Row(c).Height(22).FillWidth().Gap(6).Padding(0, 8).AlignItems(ui.Center).Label(modelMenuMark("header", opt.provider, "", false, false, false)).Children(func() {
-		ui.Box(c).Size(6, 6).Radius(3).Background(a.connectionColor(a.connByID(opt.connID))).Shrink(0)
-		ui.Text(c, opt.provider).FontSize(12).FontWeight(600).TextColor(p.TextSecondary).SingleLine().Ellipsis("…")
-	})
-}
-
-func (a *App) modelMenuSep(c *ui.Context) {
-	p := a.look
-	ui.Box(c).Height(1).FillWidth().Margin(4, 8).Background(p.SeparatorDefault).Label(modelMenuMark("sep", "", "", false, false, false))
-}
-
-func (a *App) modelMenuUnavailable(c *ui.Context, cfg Config) {
-	p := a.look
-	model := strings.TrimSpace(cfg.Model)
-	ui.Row(c).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center).Label(modelMenuMark("unavailable", "", model, false, true, false)).Children(func() {
-		ui.Box(c).Size(12, 12).Shrink(0).Children(func() {
-			ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.TextTertiary)
-		})
-		controlText(c, model+" (unavailable)", 13, 0, 400, p.TextTertiary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
-	})
-}
-
-func (a *App) modelMenuAction(c *ui.Context, sel ui.SelectParts[string], title, value string) {
-	a.modelMenuRow(c, sel, "", title, value, true, false)
-}
-
-func (a *App) modelMenuRow(c *ui.Context, sel ui.SelectParts[string], provider, title, value string, enabled, checked bool) {
-	p := a.look
-	item := sel.Item(value).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center).Cursor(ui.CursorPointer)
-	fg := p.TextPrimary
-	if item.Highlighted() {
-		item.Background(p.AccentDefault)
-		fg = p.TextOnAccent
-	}
-	kind := "model"
-	if value == modelMenuSettings || value == modelMenuAdd {
-		kind = "action"
-	}
-	item.Label(modelMenuMark(kind, provider, title, enabled, checked, item.Highlighted()))
-	item.Children(func() {
-		slot := ui.Box(c).Size(12, 12).Shrink(0)
-		if checked {
-			slot.Children(func() {
-				ui.Icon(c, iconCheck).Size(12, 12).TextColor(fg)
+	search = len(opts) >= menuSearchAt
+	prev := ""
+	listed := false
+	for _, opt := range opts {
+		if opt.connID != prev {
+			items = append(items, popEntry{
+				Kind: popHeader, Text: opt.provider, Dot: a.menuDot(a.connByID(opt.connID)),
+				MarkKind: "header", MarkProv: opt.provider,
 			})
+			prev = opt.connID
 		}
-		controlText(c, title, 13, 0, 400, fg).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
-	})
+		on := modelChosen(cfg, opt.connID, opt.model)
+		if on {
+			listed = true
+		}
+		items = append(items, popEntry{
+			Kind: popItem, ID: modelChoiceID(opt.connID, opt.model), Text: opt.model, Group: opt.provider,
+			Checkable: true, Checked: on,
+			MarkKind: "model", MarkProv: opt.provider, MarkModel: opt.model, MarkOn: true,
+		})
+	}
+	if !listed && strings.TrimSpace(cfg.Model) != "" {
+		model := strings.TrimSpace(cfg.Model)
+		items = append(items, popEntry{
+			Kind: popItem, ID: modelChoiceID(cfg.ConnectionID, model), Text: model + " (unavailable)",
+			Checkable: true, Checked: true, Disabled: true,
+			MarkKind: "unavailable", MarkModel: model, MarkOn: false,
+		})
+	}
+	footer = []popEntry{{
+		Kind: popItem, ID: modelMenuSettings, Text: "Models & Providers…",
+		MarkKind: "action", MarkModel: "Models & Providers…", MarkOn: true,
+	}}
+	return items, footer, search
+}
+
+// menuDot is the provider status dot. Keychain denial uses status/warning,
+// the same color as the Models & Providers list.
+func (a *App) menuDot(conn *Connection) ui.Color {
+	if conn == nil {
+		return a.look.TextTertiary
+	}
+	keyless := !conn.Custom && keylessProvider(conn.Provider)
+	if !keyless && a.keyBlocked(conn.ID) {
+		return a.look.StatusWarning
+	}
+	return a.connectionColor(conn)
 }
 
 // modelMenuMark identifies one popup row for tests. The fields are kind,
@@ -1946,8 +1899,8 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 						// 24pt, not the send button's 26: the hint's line box was making
 						// this row 2pt tall and the single-line border box 75.
 						ui.Row(c).FillWidth().Height(composerToolH).Gap(4).AlignItems(ui.Center).Children(func() {
-							a.tip(c, a.modelMenu(c, conv), "Model").MinWidth(0)
-							a.effortMenu(c, conv).Shrink(0)
+							a.tip(c, a.modelMenu(c, conv, "composer"), "Model").MinWidth(0)
+							a.effortMenu(c, conv, "composer").Shrink(0)
 							a.newSessionButton(c)
 							ui.Spacer(c)
 							if a.cardContentWidth(c) >= 560 {
@@ -2089,8 +2042,8 @@ func (a *App) inlineEditor(c *ui.Context, conv *Conversation) {
 					return true
 				})
 				ui.Row(c).FillWidth().Height(composerToolH).Gap(4).AlignItems(ui.Center).Children(func() {
-					a.modelMenu(c, conv).MinWidth(0)
-					a.effortMenu(c, conv).Shrink(0)
+					a.modelMenu(c, conv, "edit").MinWidth(0)
+					a.effortMenu(c, conv, "edit").Shrink(0)
 					ui.Spacer(c)
 					// Label/Small (12/15) in text/secondary. Only when later
 					// messages exist. It gives up width before the model name.
@@ -2122,7 +2075,7 @@ func (a *App) inlineEditor(c *ui.Context, conv *Conversation) {
 	})
 }
 
-func (a *App) effortMenu(c *ui.Context, conv *Conversation) ui.Element {
+func (a *App) effortMenu(c *ui.Context, conv *Conversation, slot string) ui.Element {
 	p := a.look
 	unsupported := reasoningUnsupported(conv.Config)
 	word := effortLabel(conv.Config.Reasoning)
@@ -2131,7 +2084,7 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation) ui.Element {
 	}
 	// Plain chip: sparkle and the effort word, no control fill. The
 	// accessible name still says Reasoning so the menu is findable.
-	b := ui.ButtonBase(c).Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Label("Reasoning: " + word).Cursor(ui.CursorPointer)
+	b := ui.ButtonBase(c.Key("effort-menu-"+slot)).Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Label("Reasoning: " + word).Cursor(ui.CursorPointer)
 	fg := p.TextSecondary
 	switch {
 	case unsupported:
@@ -2148,17 +2101,18 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation) ui.Element {
 		if conv != nil {
 			chatID = conv.ID
 		}
-		b.Menu(func(m *ui.Menu) {
-			cur := a.conversation(chatID)
-			current := "Default"
-			if cur != nil {
-				current = effortLabel(cur.Config.Reasoning)
-			}
-			for _, name := range effortOptions {
-				if m.Item(name).Checked(name == current).Chosen() {
-					a.setEffortChat(chatID, name)
-				}
-			}
+		cur := a.conversation(chatID)
+		current := "Default"
+		if cur != nil {
+			current = effortLabel(cur.Config.Reasoning)
+		}
+		a.bindPopover(c, "effort-"+slot, b, popSpec{
+			Name:          "Reasoning",
+			Items:         effortMenuEntries(current),
+			ComposerFocus: true,
+			OnSelect: func(id string) {
+				a.setEffortChat(chatID, id)
+			},
 		})
 	}
 	b.Children(func() {
@@ -2170,6 +2124,22 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation) ui.Element {
 		return a.tip(c, b, "This model doesn't support reasoning effort.")
 	}
 	return a.tip(c, b, "Reasoning effort for this chat")
+}
+
+// effortMenuEntries is Off / Default, a separator, then the effort levels.
+// The same order is the Settings segmented control.
+func effortMenuEntries(current string) []popEntry {
+	var out []popEntry
+	for _, name := range effortOptions {
+		if name == "Minimal" {
+			out = append(out, popEntry{Kind: popSep})
+		}
+		out = append(out, popEntry{
+			Kind: popItem, ID: name, Text: name, Checkable: true, Checked: name == current,
+			MarkKind: "effort", MarkModel: name, MarkOn: true,
+		})
+	}
+	return out
 }
 
 func (a *App) roundButton(c *ui.Context, label string, glyph *ui.SVG, primary, disabled bool) ui.Element {
@@ -2583,8 +2553,7 @@ func (a *App) lineField(c *ui.Context, value *string, placeholder, font string) 
 // color dot; the menu is an overlay with the 0.5pt border.
 func (a *App) providerSelect(c *ui.Context) ui.Element {
 	p := a.look
-	sel := ui.SelectBase(c, &a.form.Provider)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("chat-provider"))
 	b.Height(22).MinWidth(168).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("Provider").Cursor(ui.CursorPointer)
 	b.Shadow(0, 0.5, 1, 0, p.ShadowMd)
 	if b.Pressed() {
@@ -2597,22 +2566,24 @@ func (a *App) providerSelect(c *ui.Context) ui.Element {
 		controlText(c, a.form.Provider, 13, 0, 400, p.TextPrimary).Grow(1)
 		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 	})
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(5).Gap(0).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(180)
-		panel.Shadow(0, 8, 24, 0, p.ShadowMd)
-		for _, name := range providerNames() {
-			opt := name
-			item := sel.Item(opt).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center)
-			fg := p.TextPrimary
-			if item.Highlighted() {
-				item.Background(p.AccentDefault)
-				fg = p.TextOnAccent
-			}
-			item.Children(func() {
-				ui.Box(c).Size(6, 6).Radius(3).Background(a.look.providerColor(opt, opt == "Custom")).Shrink(0)
-				controlText(c, opt, 13, 0, 400, fg)
-			})
-		}
+	var items []popEntry
+	for _, name := range providerNames() {
+		name := name
+		dot := p.providerColor(name, name == "Custom")
+		items = append(items, popEntry{
+			Kind: popItem, ID: name, Text: name, Checkable: true, Checked: name == a.form.Provider,
+			Body: func(c *ui.Context, fg ui.Color) {
+				ui.Box(c).Size(6, 6).Radius(3).Background(dot).Shrink(0)
+				controlText(c, name, 13, 0, 400, fg)
+			},
+		})
+	}
+	a.bindPopover(c, "chat-provider", b, popSpec{
+		Name:  "Provider",
+		Items: items,
+		OnSelect: func(id string) {
+			a.form.Provider = id
+		},
 	})
 	return b
 }
