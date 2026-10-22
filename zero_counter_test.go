@@ -35,7 +35,7 @@ func TestCustomDraftHidesZeroCounter(t *testing.T) {
 		t.Fatalf("fetched list hid the counter: %q", lt.Texts())
 	}
 
-	dir := "/cursor/stores/self/artifacts/zero-counter"
+	dir := testArtifactDir(t, "zero-counter")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: Vet, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      # The UI font on the development machine is Noto Sans (system-ui),
+      # with DejaVu Sans for symbols such as ↵ and WenQuanYi Micro Hei for
+      # Han. Ubuntu otherwise prefers Cantarell for system-ui, which changes
+      # the measurements these tests check.
+      - name: Install UI fonts
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-core \
+            fonts-dejavu-core \
+            fonts-dejavu-mono \
+            fonts-wqy-microhei
+          sudo tee /etc/fonts/conf.d/99-cove-system-ui.conf >/dev/null <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <match>
+              <test name="family" compare="eq"><string>system-ui</string></test>
+              <edit name="family" mode="assign" binding="strong"><string>Noto Sans</string></edit>
+            </match>
+          </fontconfig>
+          EOF
+          fc-cache -f
+          fc-match system-ui
+          fc-match sans-serif
+
+      - name: Test
+        # The main package takes several minutes; the default 10m limit is close.
+        run: go test -timeout 20m ./...
+
+      # MyGo needs no cgo, so darwin/arm64 cross-compiles on Linux.
+      # The bundle is unsigned and not notarized.
+      - name: Build Cove.app for darwin/arm64
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+
+      - name: Package Cove.app
+        run: .github/scripts/package-darwin-app.sh Cove-darwin-arm64.zip
+
+      - name: Upload Cove.app
+        uses: actions/upload-artifact@v7
+        with:
+          # archive: false keeps the zip made above, including symlink
+          # entries and the executable bit, instead of wrapping it again.
+          path: Cove-darwin-arm64.zip
+          retention-days: 5
+          archive: false
+          if-no-files-found: error

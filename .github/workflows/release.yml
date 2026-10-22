@@ -1,0 +1,152 @@
+name: Release
+
+# The tag names the release. mygo.json is what Cove.app records, so this
+# workflow fails when the tag without the leading v is not that version.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, including the leading v (for example v0.7.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check the tag against mygo.json
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          tag = os.environ["RELEASE_TAG"].strip()
+          if (
+              not tag.startswith("v")
+              or tag == "v"
+              or "/" in tag
+              or any(ch.isspace() for ch in tag)
+          ):
+              sys.exit(f"tag {tag!r} must look like vX.Y.Z")
+          version = tag[1:]
+          with open("mygo.json", encoding="utf-8") as f:
+              config = json.load(f)["version"]
+          if not isinstance(config, str) or config == "":
+              sys.exit("mygo.json version is empty")
+          if version != config:
+              sys.exit(
+                  f"tag version {version} does not match mygo.json version {config}. "
+                  "Set version in mygo.json, commit, then tag that commit."
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"version={version}\n")
+              out.write(f"tag={tag}\n")
+          print(f"releasing {tag} (mygo.json {config})")
+          PY
+
+      - name: Vet
+        run: go vet ./...
+
+      # Same faces as CI: Noto Sans for the UI, DejaVu for symbols, WenQuanYi for Han.
+      - name: Install UI fonts
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-core \
+            fonts-dejavu-core \
+            fonts-dejavu-mono \
+            fonts-wqy-microhei
+          sudo tee /etc/fonts/conf.d/99-cove-system-ui.conf >/dev/null <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <match>
+              <test name="family" compare="eq"><string>system-ui</string></test>
+              <edit name="family" mode="assign" binding="strong"><string>Noto Sans</string></edit>
+            </match>
+          </fontconfig>
+          EOF
+          fc-cache -f
+          fc-match system-ui
+          fc-match sans-serif
+
+      - name: Test
+        # The main package takes several minutes; the default 10m limit is close.
+        run: go test -timeout 20m ./...
+
+      - name: Build Cove.app for darwin/arm64
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+
+      - name: Package Cove.app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-arm64.zip"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          version = os.environ["VERSION"]
+          text = f"""## Install
+
+          Cove {version} is an unsigned build for Apple Silicon only (`darwin/arm64`). It is not notarized.
+
+          1. Unzip `Cove-{version}-darwin-arm64.zip`.
+          2. Move `Cove.app` to `/Applications`.
+          3. Clear the quarantine flag, then open the app:
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/Cove.app
+          ```
+
+          Or Control-click `Cove.app` and choose Open. macOS will say the developer cannot be verified. That is expected for an unsigned app.
+          """
+          Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
+          PY
+          archive="Cove-${VERSION}-darwin-arm64.zip"
+          args=(
+            gh release create "$TAG"
+            --verify-tag
+            --generate-notes
+            --title "Cove ${VERSION}"
+            --notes-file "${RUNNER_TEMP}/install-notes.md"
+          )
+          if [[ $VERSION == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          args+=("$archive" "${archive}.sha256")
+          "${args[@]}"

@@ -14,7 +14,7 @@ import (
 )
 
 func TestSmallWindowLayout(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts")
+	dir := testArtifactDir(t, "")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestSuggestionIconsRender(t *testing.T) {
 	// content the fourth card is hidden.
 	sizes := [][2]int{{720, 520}, {880, 600}, {1120, 760}}
 	names := []string{"Explain a tricky idea", "Outline a plan", "Review a draft", "Compare two approaches"}
-	dir := "/opt/cursor/artifacts"
+	dir := testArtifactDir(t, "")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

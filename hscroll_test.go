@@ -83,7 +83,7 @@ func TestHScrollFades(t *testing.T) {
 }
 
 func TestHScrollShots(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/hscroll"
+	dir := testArtifactDir(t, "hscroll")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestTableFadeMatchesSurface(t *testing.T) {
 }
 
 func TestHScrollR3Shots(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/hscroll-r3"
+	dir := testArtifactDir(t, "hscroll-r3")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

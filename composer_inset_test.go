@@ -87,7 +87,7 @@ func TestProviderShowsSavedKeyBeforeRead(t *testing.T) {
 }
 
 func TestComposerInsetCrops(t *testing.T) {
-	dir := filepath.Join("/cursor/stores/self/artifacts", "composer-insets")
+	dir := testArtifactDir(t, "composer-insets")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

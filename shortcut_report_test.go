@@ -38,7 +38,7 @@ Edit › Find has Find… ⌘F, Find Next ⌘G, and Find Previous ⇧⌘G. Find 
 Request body
 A model choice is the connection id plus the model id. The next chat request sends that model id to that connection’s /chat/completions endpoint with that connection’s key. Tests: TestModelSwitchPersistsAcrossProviders, TestCatalogIDMatchesHeader, TestOptInPresetAndCustomShareURL.
 `
-	path := "/opt/cursor/artifacts/perf/after.txt"
+	path := filepath.Join(testArtifactDir(t, "perf"), "after.txt")
 	raw, err := os.ReadFile(path)
 	body := ""
 	if err == nil {

@@ -265,7 +265,7 @@ func modelSwitchApp(t *testing.T, dir string) *App {
 
 func cropChip(t *testing.T, tt *ui.Tester, name string) {
 	t.Helper()
-	dir := "/opt/cursor/artifacts/model-switch"
+	dir := testArtifactDir(t, "model-switch")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func cropChip(t *testing.T, tt *ui.Tester, name string) {
 
 func writeMenuBoard(t *testing.T, rows []menuRow, name string) {
 	t.Helper()
-	dir := "/opt/cursor/artifacts/model-switch"
+	dir := testArtifactDir(t, "model-switch")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

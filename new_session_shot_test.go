@@ -17,7 +17,7 @@ import (
 // boards. Each implementation board uses the design cell rectangles at
 // half scale, so a later uniform scale keeps the aspect ratio.
 func TestNewSessionShots(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "new-session")
+	dir := testArtifactDir(t, "new-session")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func nsSettingsBoard(t *testing.T, dark bool) image.Image {
 
 func nsMinBoard(t *testing.T, dark bool) image.Image {
 	t.Helper()
-	dir := filepath.Join("/opt/cursor/artifacts", "new-session")
+	dir := testArtifactDir(t, "new-session")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

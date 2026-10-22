@@ -205,7 +205,7 @@ func TestKeychainDenialNoticeRetriesOnce(t *testing.T) {
 }
 
 func TestKeychainDeniedCrops(t *testing.T) {
-	dir := filepath.Join("/cursor/stores/self/artifacts", "final14b")
+	dir := testArtifactDir(t, "final14b")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

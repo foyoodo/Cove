@@ -204,7 +204,7 @@ func TestWindowBitmapIsTheBackground(t *testing.T) {
 }
 
 func TestBandingArtifacts(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "banding")
+	dir := testArtifactDir(t, "banding")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

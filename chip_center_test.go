@@ -213,7 +213,7 @@ func TestRetinaGaps(t *testing.T) {
 func TestControlCapHeight(t *testing.T) {
 	var lines []string
 	defer func() {
-		dir := "/cursor/stores/self/artifacts/chip-center"
+		dir := testArtifactDir(t, "chip-center")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Error(err)
 			return
@@ -258,7 +258,7 @@ func TestControlCapHeight(t *testing.T) {
 }
 
 func TestControlCapHeightShots(t *testing.T) {
-	dir := "/cursor/stores/self/artifacts/chip-center"
+	dir := testArtifactDir(t, "chip-center")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +689,7 @@ func measureStopHint(t *testing.T, mode string, dark bool) []string {
 
 func saveInkCrop(t *testing.T, name string, img *image.RGBA, row ui.Rect) {
 	t.Helper()
-	dir := "/cursor/stores/self/artifacts/chip-center"
+	dir := testArtifactDir(t, "chip-center")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Error(err)
 		return

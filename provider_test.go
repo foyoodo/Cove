@@ -755,7 +755,7 @@ func TestDefaultModelPrefixStaysVisible(t *testing.T) {
 		a.settingsPage = settingsList
 		return a
 	}
-	dir := filepath.Join("/opt/cursor/artifacts", "r4")
+	dir := testArtifactDir(t, "r4")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
