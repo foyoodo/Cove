@@ -6,8 +6,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// AccentFallback is the blue used when the desktop accent cannot be read
-// (Preferences.Accent with A == 0).
+// AccentFallback is the light system blue used when the desktop accent
+// cannot be read (Preferences.Accent with A == 0). Dark mode uses the
+// dark system blue; Resolve selects it. A Mac that can read
+// NSColor.controlAccentColor already supplies the mode-correct color.
 func AccentFallback() ui.Color { return ui.Hex("#007AFF") }
 
 // Inactive gray the accent fades toward: light #A1A1A6, dark #6E6E73.
@@ -67,13 +69,17 @@ func AccentIDs() []string {
 
 // Resolve builds the palette for one frame. themeID picks the gradient and
 // the mark color. accent is the desktop accent; A == 0 means it could not
-// be read, and the fallback blue is used. Selection stays on the mark.
+// be read, and the system blue for this mode is used. Selection stays on
+// the mark.
 // When focused is false, the inactive set replaces the accent, the primary
 // button, and the selected row (neutral gray).
 func Resolve(themeID string, dark, focused bool, accent ui.Color) Colors {
 	base := Palette(themeID, dark)
 	if accent.A == 0 {
-		accent = AccentFallback()
+		// Unreadable accent (headless tester, or a desktop that reports
+		// none). The system blue is the light fallback in light mode and
+		// the dark system blue in dark mode.
+		accent, _ = NamedAccent("blue", dark)
 	}
 	accent.A = 255
 	applyAccent(&base, accent, dark)

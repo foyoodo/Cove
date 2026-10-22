@@ -107,6 +107,33 @@ func TestAccentFollowsDesktop(t *testing.T) {
 	}
 }
 
+// A missing desktop accent follows the system blue for the appearance.
+// Light stays the light blue. Dark is the dark system blue, not the light
+// one carried over. A color the desktop did report is kept in both modes.
+func TestAccentFallbackFollowsAppearance(t *testing.T) {
+	darkBlue, ok := themes.NamedAccent("blue", true)
+	if !ok {
+		t.Fatal("no dark blue accent")
+	}
+	a := newTestApp(t)
+	tt := openTester(a)
+	a.data.Appearance = appearanceDark
+	tt.SetDark(true)
+	tt.Frame()
+	if a.look.AccentDefault != darkBlue {
+		t.Fatalf("dark fallback accent %+v, want dark system blue %+v", a.look.AccentDefault, darkBlue)
+	}
+	if a.look.AccentDefault == themes.AccentFallback() {
+		t.Fatal("dark mode kept the light system blue")
+	}
+	a.data.Appearance = appearanceLight
+	tt.SetDark(false)
+	tt.Frame()
+	if a.look.AccentDefault != themes.AccentFallback() {
+		t.Fatalf("light fallback accent %+v", a.look.AccentDefault)
+	}
+}
+
 func TestAppearanceModePersistsAndOverridesSystem(t *testing.T) {
 	a := newTestApp(t)
 	tt := openTester(a)

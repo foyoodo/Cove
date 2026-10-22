@@ -359,7 +359,7 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 		panel.Children(func() {
 			if search {
 				searchEl = a.popoverSearch(c, st, spec)
-				a.popSep(c, "")
+				a.popSep(c, modelMenuMark("sep", "search", "", false, false, false))
 			}
 			scroll := ui.Scroll(c).FillWidth().Height(viewH).TrackScroll(&st.scroll)
 			scroll.Children(func() {
@@ -723,11 +723,19 @@ func menuLabelRoom(e popEntry) float32 {
 
 func (a *App) popSep(c *ui.Context, mark string) {
 	p := a.look
-	line := ui.Box(c).Height(menuSepThick).FillWidth().Margin(menuSepMargin, menuSepInset-menuPad).
-		Background(p.SeparatorDefault).Role(ui.RoleNone)
-	if mark != "" {
-		line.Label(mark)
-	}
+	// FillWidth resolves to 100% of the content box and does not subtract
+	// horizontal margin, so a margin only shifts the full-width line.
+	// Spacers shorten it: line width = content width − 2×(inset − pad),
+	// which is 10pt from each outer edge.
+	inset := menuSepInset - menuPad
+	ui.Row(c).FillWidth().Height(menuSepThick).MarginY(menuSepMargin).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Width(inset).Shrink(0)
+		line := ui.Box(c).Height(menuSepThick).Grow(1).MinWidth(0).Background(p.SeparatorDefault).Role(ui.RoleNone)
+		if mark != "" {
+			line.Label(mark)
+		}
+		ui.Box(c).Width(inset).Shrink(0)
+	})
 }
 
 func popMark(e popEntry, hot bool) string {

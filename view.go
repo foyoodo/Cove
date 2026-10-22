@@ -883,7 +883,7 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 			{Kind: popItem, ID: "settings", Text: "Chat Settings…", MarkKind: "more", MarkModel: "Chat Settings…", MarkOn: true},
 			{Kind: popItem, ID: "rename", Text: "Rename", MarkKind: "more", MarkModel: "Rename", MarkOn: true},
 			{Kind: popItem, ID: "delete", Text: "Delete chat", MarkKind: "more", MarkModel: "Delete chat", MarkOn: true},
-			{Kind: popSep},
+			{Kind: popSep, MarkKind: "sep"},
 			{Kind: popItem, ID: "request", Text: "Last request", MarkKind: "more", MarkModel: "Last request", MarkOn: true},
 		},
 		OnSelect: func(id string) {
@@ -2132,7 +2132,7 @@ func effortMenuEntries(current string) []popEntry {
 	var out []popEntry
 	for _, name := range effortOptions {
 		if name == "Minimal" {
-			out = append(out, popEntry{Kind: popSep})
+			out = append(out, popEntry{Kind: popSep, MarkKind: "sep"})
 		}
 		out = append(out, popEntry{
 			Kind: popItem, ID: name, Text: name, Checkable: true, Checked: name == current,

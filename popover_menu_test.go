@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"cove/themes"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -546,6 +548,9 @@ func TestPopoverAnchorEdge(t *testing.T) {
 	if abs32(menu.X+menu.W-(more.X+more.W)) > 1.5 {
 		t.Fatalf("More menu right %.1f, button right %.1f (left %.1f vs %.1f)", menu.X+menu.W, more.X+more.W, menu.X, more.X)
 	}
+	if menu.X+menu.W > float32(1120)-menuWindowMargin-2 {
+		t.Fatalf("1120 More menu hugs the window: right %.1f button %.1f", menu.X+menu.W, more.X+more.W)
+	}
 	tt.Key(0, ui.KeyEscape)
 
 	// On a 720-wide window the Reasoning control sits against the card's
@@ -567,15 +572,154 @@ func TestPopoverAnchorEdge(t *testing.T) {
 	if abs32(menu.X+menu.W-(btn.X+btn.W)) > 1.5 {
 		t.Fatalf("reasoning menu right %.1f, button right %.1f", menu.X+menu.W, btn.X+btn.W)
 	}
+	if btn.X+btn.W < 676 || btn.X+btn.W > 686 {
+		t.Fatalf("reasoning button right %.1f, want about 681", btn.X+btn.W)
+	}
+	if menu.X+menu.W > float32(720)-menuWindowMargin-2 {
+		t.Fatalf("settings menu hugs the window: right %.1f", menu.X+menu.W)
+	}
+
+	// At 720 the More button's right edge is the window minus the 12pt
+	// title-bar padding (~708). Parking the menu on the window margin
+	// would put it at 712.
+	c := menuProtoApp(t)
+	tc := ui.NewTester(c.view, 720, 520)
+	tc.Frame()
+	more720 := mustFind(t, tc, "More")
+	if err := tc.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	menu = tallestLabel(t, tc, "More")
+	if abs32(menu.X+menu.W-(more720.X+more720.W)) > 1.5 {
+		t.Fatalf("720 More menu right %.1f, button right %.1f", menu.X+menu.W, more720.X+more720.W)
+	}
+	if more720.X+more720.W < 704 || more720.X+more720.W > 712 {
+		t.Fatalf("720 More button right %.1f, want about 708", more720.X+more720.W)
+	}
+	if menu.X+menu.W > float32(720)-menuWindowMargin-2 {
+		t.Fatalf("720 More menu hugs the window: right %.1f", menu.X+menu.W)
+	}
+	// Mouse open, nothing current: no row is highlighted.
+	for _, row := range kindMarks(t, tc, "more") {
+		if row.hot {
+			t.Fatalf("mouse-opened More highlighted %q", row.label)
+		}
+	}
+}
+
+func TestPopoverSeparatorInsets(t *testing.T) {
+	openers := []struct {
+		name string
+		open func(t *testing.T, a *App, tt *ui.Tester)
+		menu string
+	}{
+		{"model", func(t *testing.T, a *App, tt *ui.Tester) { openModelMenu(t, tt) }, "Model"},
+		{"effort", func(t *testing.T, a *App, tt *ui.Tester) {
+			if err := tt.Click("Reasoning: Medium"); err != nil {
+				t.Fatal(err)
+			}
+		}, "Reasoning"},
+		{"more", func(t *testing.T, a *App, tt *ui.Tester) {
+			if err := tt.Click("More"); err != nil {
+				t.Fatal(err)
+			}
+		}, "More"},
+		{"settings", func(t *testing.T, a *App, tt *ui.Tester) { openSettingsReasoning(t, a, tt) }, "Reasoning"},
+	}
+	for _, win := range [][2]int{{720, 520}, {1120, 760}} {
+		for _, op := range openers {
+			a := menuProtoApp(t)
+			tt := ui.NewTester(a.view, win[0], win[1])
+			tt.Frame()
+			op.open(t, a, tt)
+			menu := tallestLabel(t, tt, op.menu)
+			if menu.H < 40 {
+				t.Fatalf("%s %v menu did not open: %+v", op.name, win, menu)
+			}
+			var seps []ui.Rect
+			for _, lab := range menuLabels(t, tt) {
+				kind, _, _, _, _, _, ok := parseModelMenuMark(lab.text)
+				if ok && kind == "sep" && lab.r.W > 1 && lab.r.H > 0 {
+					seps = append(seps, lab.r)
+				}
+			}
+			if len(seps) == 0 {
+				t.Fatalf("%s %v has no separator", op.name, win)
+			}
+			for _, s := range seps {
+				left := s.X - menu.X
+				right := menu.X + menu.W - (s.X + s.W)
+				if abs32(left-menuSepInset) > 1 || abs32(right-menuSepInset) > 1 {
+					t.Fatalf("%s %v separator insets left %.2f right %.2f, want %v (line %+v menu %+v)", op.name, win, left, right, menuSepInset, s, menu)
+				}
+			}
+		}
+	}
+}
+
+func TestPopoverDarkAccent(t *testing.T) {
+	want, ok := themes.NamedAccent("blue", true)
+	if !ok {
+		t.Fatal("no dark blue")
+	}
+	light := themes.AccentFallback()
+	a := menuProtoApp(t)
+	a.data.Appearance = appearanceDark
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetDark(true)
+	tt.SetScale(2)
+	tt.Frame()
+	if a.look.AccentDefault != want {
+		t.Fatalf("menu palette accent %+v, want dark system blue %+v", a.look.AccentDefault, want)
+	}
+	openModelMenu(t, tt)
+	hot := hotLabeled(menuRows(t, tt))
+	if hot.label == "" || !hot.checked {
+		t.Fatalf("open highlight %+v", hot)
+	}
+	img := tt.Image()
+	px := img.RGBAAt(int((hot.rect.X+hot.rect.W/2)*2+0.5), int((hot.rect.Y+hot.rect.H/2)*2+0.5))
+	if px.R != want.R || px.G != want.G || px.B != want.B {
+		t.Fatalf("dark highlight pixel R%v G%v B%v, want R%v G%v B%v (light blue is R%v G%v B%v)", px.R, px.G, px.B, want.R, want.G, want.B, light.R, light.G, light.B)
+	}
+	tt.Key(0, ui.KeyDown)
+	img = tt.Image()
+	var checked menuRow
+	for _, r := range menuRows(t, tt) {
+		if r.checked && !r.hot {
+			checked = r
+			break
+		}
+	}
+	if checked.label == "" {
+		t.Fatal("checked row is still the highlight")
+	}
+	menu := mustFind(t, tt, "Model")
+	cx := menu.X + menuPad + menuLead + menuCheck/2
+	cy := checked.rect.Y + checked.rect.H/2
+	best := 1 << 20
+	for dy := -6; dy <= 6; dy++ {
+		for dx := -6; dx <= 6; dx++ {
+			p := img.RGBAAt(int((cx+float32(dx))*2+0.5), int((cy+float32(dy))*2+0.5))
+			d := absInt(int(p.R)-int(want.R)) + absInt(int(p.G)-int(want.G)) + absInt(int(p.B)-int(want.B))
+			if d < best {
+				best = d
+			}
+		}
+	}
+	if best > 30 {
+		t.Fatalf("checkmark is not the dark system blue (nearest channel distance %d)", best)
+	}
 }
 
 func TestPopoverScreenshots(t *testing.T) {
-	dir := testArtifactDir(t, "popover-menu")
+	dir := testArtifactDir(t, "popover-menu-r2")
 	shots := []struct {
 		name string
 		open func(t *testing.T, a *App, tt *ui.Tester)
 		app  func(t *testing.T) *App
 	}{
+		{"model-menu-open", openModelMenuUntouched, menuProtoApp},
 		{"model-menu", openProtoHighlight, menuProtoApp},
 		{"model-menu-search", openProtoSearch, menuProtoApp},
 		{"model-menu-empty", openProtoEmpty, menuProtoApp},
@@ -633,6 +777,11 @@ func openModelMenu(t *testing.T, tt *ui.Tester) {
 	if !modelMenuOpen(tt) {
 		t.Fatal("model menu did not open")
 	}
+}
+
+func openModelMenuUntouched(t *testing.T, a *App, tt *ui.Tester) {
+	t.Helper()
+	openModelMenu(t, tt)
 }
 
 func openProtoHighlight(t *testing.T, a *App, tt *ui.Tester) {
