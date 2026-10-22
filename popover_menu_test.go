@@ -712,6 +712,84 @@ func TestPopoverDarkAccent(t *testing.T) {
 	}
 }
 
+// A reported system accent is accent/default. Blue is only the fallback
+// used when Preferences().Accent cannot be read. The desktop supplies the
+// mode's own source color (purple's dark variant in dark mode); the
+// palette uses that color as the accent rather than remixing it.
+func TestPopoverFollowsSystemAccent(t *testing.T) {
+	dir := testArtifactDir(t, "popover-menu-r2")
+	for _, dark := range []bool{false, true} {
+		purple, ok := themes.NamedAccent("purple", dark)
+		if !ok {
+			t.Fatal("no purple accent")
+		}
+		blue, _ := themes.NamedAccent("blue", dark)
+		mode := "light"
+		if dark {
+			mode = "dark"
+		}
+		for _, win := range [][2]int{{720, 520}, {1120, 760}} {
+			a := menuProtoApp(t)
+			if dark {
+				a.data.Appearance = appearanceDark
+			} else {
+				a.data.Appearance = appearanceLight
+			}
+			tt := ui.NewTester(a.view, win[0], win[1])
+			tt.SetScale(2)
+			tt.SetDark(dark)
+			tt.SetPreferences(ui.Preferences{Accent: purple})
+			tt.Frame()
+			if a.look.AccentDefault != purple {
+				t.Fatalf("%s palette accent %+v, want system purple %+v", mode, a.look.AccentDefault, purple)
+			}
+			if a.look.AccentDefault == blue || a.look.AccentDefault == themes.AccentFallback() {
+				t.Fatalf("%s system purple was replaced by blue %+v", mode, a.look.AccentDefault)
+			}
+			openModelMenu(t, tt)
+			hot := hotLabeled(menuRows(t, tt))
+			if hot.label == "" || !hot.checked {
+				t.Fatalf("%s %v open highlight %+v", mode, win, hot)
+			}
+			img := tt.Image()
+			px := img.RGBAAt(int((hot.rect.X+hot.rect.W/2)*2+0.5), int((hot.rect.Y+hot.rect.H/2)*2+0.5))
+			if px.R != purple.R || px.G != purple.G || px.B != purple.B {
+				t.Fatalf("%s %v highlight R%v G%v B%v, want R%v G%v B%v", mode, win, px.R, px.G, px.B, purple.R, purple.G, purple.B)
+			}
+			name := "model-menu-open-purple-" + strconv.Itoa(win[0]) + "x" + strconv.Itoa(win[1]) + "-" + mode + "@2x.png"
+			writePNG(t, filepath.Join(dir, name), img)
+			tt.Key(0, ui.KeyDown)
+			img = tt.Image()
+			var checked menuRow
+			for _, r := range menuRows(t, tt) {
+				if r.checked && !r.hot {
+					checked = r
+					break
+				}
+			}
+			if checked.label == "" {
+				t.Fatalf("%s %v checked row is still the highlight", mode, win)
+			}
+			menu := mustFind(t, tt, "Model")
+			cx := menu.X + menuPad + menuLead + menuCheck/2
+			cy := checked.rect.Y + checked.rect.H/2
+			best := 1 << 20
+			for dy := -6; dy <= 6; dy++ {
+				for dx := -6; dx <= 6; dx++ {
+					p := img.RGBAAt(int((cx+float32(dx))*2+0.5), int((cy+float32(dy))*2+0.5))
+					d := absInt(int(p.R)-int(purple.R)) + absInt(int(p.G)-int(purple.G)) + absInt(int(p.B)-int(purple.B))
+					if d < best {
+						best = d
+					}
+				}
+			}
+			if best > 30 {
+				t.Fatalf("%s %v checkmark is not the system purple (nearest channel distance %d)", mode, win, best)
+			}
+		}
+	}
+}
+
 func TestPopoverScreenshots(t *testing.T) {
 	dir := testArtifactDir(t, "popover-menu-r2")
 	shots := []struct {
