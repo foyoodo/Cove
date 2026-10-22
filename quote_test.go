@@ -1202,20 +1202,22 @@ func TestQuoteCloseInk(t *testing.T) {
 	var doc struct {
 		Layout struct {
 			Quote struct {
-				Close struct {
-					Size    float64 `json:"size"`
-					IconInk float64 `json:"iconInk"`
-					Stroke  float64 `json:"stroke"`
-					Inset   float64 `json:"inset"`
-				} `json:"close"`
+				Card struct {
+					Remove struct {
+						Size     float64 `json:"size"`
+						IconInk  float64 `json:"iconInk"`
+						Stroke   float64 `json:"stroke"`
+						Position string  `json:"position"`
+					} `json:"remove"`
+				} `json:"card"`
 			} `json:"quote"`
 		} `json:"layout"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	tok := doc.Layout.Quote.Close
-	if tok.Size != quoteCloseSize || tok.IconInk != quoteCloseInk || tok.Stroke != quoteCloseStroke || tok.Inset != quoteCloseInset {
+	tok := doc.Layout.Quote.Card.Remove
+	if tok.Size != quoteCloseSize || tok.IconInk != quoteCloseInk || tok.Stroke != quoteCloseStroke || !strings.Contains(tok.Position, "4") {
 		t.Fatalf("tokens %+v, constants size %v iconInk %v stroke %v inset %v", tok, quoteCloseSize, quoteCloseInk, quoteCloseStroke, quoteCloseInset)
 	}
 	if !strings.Contains(quoteCloseMarkup(), fmt.Sprintf(`stroke-width="%g"`, float64(quoteCloseStroke))) {

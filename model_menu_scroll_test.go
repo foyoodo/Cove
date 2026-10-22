@@ -26,7 +26,7 @@ func TestModelMenuScrollsInShortWindow(t *testing.T) {
 	if !modelMenuOpen(tt) {
 		t.Fatal("menu did not open")
 	}
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	chip := mustFind(t, tt, "Model gamma-08")
 	if menu.H < 80 {
 		t.Fatalf("menu collapsed to %.1f, the one-row failure", menu.H)
@@ -44,8 +44,8 @@ func TestModelMenuScrollsInShortWindow(t *testing.T) {
 	if menu.Y+menu.H > chip.Y+1 {
 		t.Fatalf("menu opened over the chip instead of above it: menu %.1f..%.1f chip %.1f", menu.Y, menu.Y+menu.H, chip.Y)
 	}
-	if menu.W < 220 || menu.W > 430 {
-		t.Fatalf("menu width %.1f", menu.W)
+	if menu.W < menuMinW-1 || menu.W > menuMaxW+1 {
+		t.Fatalf("menu width %.1f, want %v–%v", menu.W, menuMinW, menuMaxW)
 	}
 
 	rows := menuRows(t, tt)
@@ -101,7 +101,7 @@ func TestModelMenuScrollsInShortWindow(t *testing.T) {
 		t.Fatal("scrolling up did not reveal the first model")
 	}
 	for step := 0; step < 40; step++ {
-		menu = mustFind(t, tt, "model menu")
+		menu = mustFind(t, tt, "Model")
 		for _, r := range menuRows(t, tt) {
 			if _, ok := models[r.label]; ok && rowOnScreen(menu, r.rect) {
 				models[r.label] = true
@@ -173,7 +173,7 @@ func TestModelMenuCapsHeight(t *testing.T) {
 	if err := tt.Click("Model gamma-08"); err != nil {
 		t.Fatal(err)
 	}
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	chip := mustFind(t, tt, "Model gamma-08")
 	if menu.H < modelMenuMaxH-16 || menu.H > modelMenuMaxH+4 {
 		t.Fatalf("menu height %.1f, want the cap %.0f", menu.H, modelMenuMaxH)
@@ -198,13 +198,13 @@ func TestModelMenuKeyboardKeepsHighlightVisible(t *testing.T) {
 	if err := tt.Click("Model alpha-00"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.Focused("Model alpha-00") {
-		t.Fatal("model button did not take the keyboard")
+	if !tt.Focused("Search models") && !tt.Focused("Model alpha-00") {
+		t.Fatal("model menu did not take the keyboard")
 	}
 	for i := 0; i < 30; i++ {
 		tt.Key(0, ui.KeyDown)
 	}
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	hot, ok := hotRow(t, tt)
 	if !ok {
 		t.Fatal("no highlighted row after Arrow Down")
@@ -218,7 +218,7 @@ func TestModelMenuKeyboardKeepsHighlightVisible(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		tt.Key(0, ui.KeyUp)
 	}
-	menu = mustFind(t, tt, "model menu")
+	menu = mustFind(t, tt, "Model")
 	hot, ok = hotRow(t, tt)
 	if !ok || hot.label != "alpha-00" || !rowOnScreen(menu, hot.rect) {
 		t.Fatalf("Arrow Up did not bring the first model back into view: %+v", hot)
@@ -228,7 +228,7 @@ func TestModelMenuKeyboardKeepsHighlightVisible(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		tt.Key(0, ui.KeyDown)
 	}
-	menu = mustFind(t, tt, "model menu")
+	menu = mustFind(t, tt, "Model")
 	hot, ok = hotRow(t, tt)
 	if !ok || !rowOnScreen(menu, hot.rect) {
 		t.Fatalf("highlight left the menu %+v", hot)
@@ -309,7 +309,7 @@ func scrollMenu(t *testing.T, tt *ui.Tester, menu ui.Rect, dy float32) {
 
 func menuSignature(t *testing.T, tt *ui.Tester) string {
 	t.Helper()
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	var b strings.Builder
 	for _, r := range menuRows(t, tt) {
 		if rowOnScreen(menu, r.rect) && r.label != "" {
@@ -322,7 +322,7 @@ func menuSignature(t *testing.T, tt *ui.Tester) string {
 
 func modelVisible(t *testing.T, tt *ui.Tester, label string) bool {
 	t.Helper()
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	for _, r := range menuRows(t, tt) {
 		if r.label == label && rowOnScreen(menu, r.rect) {
 			return true
@@ -333,7 +333,7 @@ func modelVisible(t *testing.T, tt *ui.Tester, label string) bool {
 
 func modelCheckedVisible(t *testing.T, tt *ui.Tester, model string) bool {
 	t.Helper()
-	menu := mustFind(t, tt, "model menu")
+	menu := mustFind(t, tt, "Model")
 	for _, r := range menuRows(t, tt) {
 		if r.label == model && r.checked && rowOnScreen(menu, r.rect) {
 			return true

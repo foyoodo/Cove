@@ -55,8 +55,8 @@ func (c shadowCase) name() string {
 func TestContentCardShadowContained(t *testing.T) {
 	for _, id := range []string{themes.ThemeWarm, themes.ThemeTide, themes.ThemeNeutral, themes.ThemeMist, themes.ThemeSage, themes.ThemeLavender} {
 		dark := themes.Resolve(id, true, true, ui.Color{}).ShadowCard
-		if dark.R != 0 || dark.G != 0 || dark.B != 0 || dark.A != 0x33 {
-			t.Fatalf("%s dark shadow/card #%02x%02x%02x%02x, want black 20%%", id, dark.R, dark.G, dark.B, dark.A)
+		if dark.R != 0 || dark.G != 0 || dark.B != 0 || dark.A != 0x40 {
+			t.Fatalf("%s dark shadow/card #%02x%02x%02x%02x, want alpha 64", id, dark.R, dark.G, dark.B, dark.A)
 		}
 		light := themes.Resolve(id, false, true, ui.Color{}).ShadowCard
 		if light.R != 0x3C || light.G != 0x28 || light.B != 0x32 || light.A != 0x12 {

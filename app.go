@@ -58,6 +58,9 @@ type App struct {
 	modelMenuChat string
 	// modelMenuSeen is set during the frame while that popup is open.
 	modelMenuSeen bool
+	// popovers are the in-window menus (model, effort, More, settings).
+	// Right-click menus and the menu bar stay on the system menu.
+	popovers map[string]*popoverState
 	// addProviderNote is the chat showing "Add a provider to start chatting."
 	addProviderNote string
 	settingsQuery   string

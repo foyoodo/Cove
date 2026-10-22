@@ -549,35 +549,36 @@ func byteSize(n int64) string {
 
 func (a *App) prefProvider(c *ui.Context) ui.Element {
 	p := a.look
-	sel := ui.SelectBase(c, &a.pref.cfg.Provider)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("settings-provider"))
 	b.Height(22).MinWidth(168).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("Provider").Cursor(ui.CursorPointer)
 	b.Children(func() {
 		ui.Box(c).Size(6, 6).Radius(3).Background(a.configColor(a.pref.cfg))
 		controlText(c, a.pref.cfg.Provider, 13, 0, 400, p.TextPrimary).Grow(1)
 		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary)
 	})
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(5).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(180)
-		for _, name := range providerNames() {
-			opt := name
-			item := sel.Item(opt).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center)
-			fg := p.TextPrimary
-			if item.Highlighted() {
-				item.Background(p.AccentDefault)
-				fg = p.TextOnAccent
-			}
-			item.Children(func() {
-				ui.Box(c).Size(6, 6).Radius(3).Background(p.providerColor(opt, opt == "Custom"))
-				controlText(c, opt, 13, 0, 400, fg)
-			})
-		}
-	})
-	if b.Changed() {
-		applyPreset(&a.pref.cfg)
-		a.pref = a.snapshotFrom(a.pref.cfg)
-		a.commitPref(c.Now())
+	var items []popEntry
+	for _, name := range providerNames() {
+		name := name
+		dot := p.providerColor(name, name == "Custom")
+		items = append(items, popEntry{
+			Kind: popItem, ID: name, Text: name, Checkable: true, Checked: name == a.pref.cfg.Provider,
+			Body: func(c *ui.Context, fg ui.Color) {
+				ui.Box(c).Size(6, 6).Radius(3).Background(dot).Shrink(0)
+				controlText(c, name, 13, 0, 400, fg).Grow(1).MinWidth(0)
+			},
+		})
 	}
+	now := c.Now()
+	a.bindPopover(c, "settings-provider", b, popSpec{
+		Name:  "Provider",
+		Items: items,
+		OnSelect: func(id string) {
+			a.pref.cfg.Provider = id
+			applyPreset(&a.pref.cfg)
+			a.pref = a.snapshotFrom(a.pref.cfg)
+			a.commitPref(now)
+		},
+	})
 	return b
 }
 
@@ -684,8 +685,7 @@ func (a *App) prefModel(c *ui.Context) ui.Element {
 	if a.modelPick == "" {
 		a.modelPick = modelChoiceID(a.pref.cfg.ConnectionID, a.pref.cfg.Model)
 	}
-	sel := ui.SelectBase(c, &a.modelPick)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("settings-default-model"))
 	b.Height(22).MinWidth(180).MaxWidth(300).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("Default model menu").Cursor(ui.CursorPointer)
 	missing := !a.modelOnConnection(a.pref.cfg.ConnectionID, a.pref.cfg.Model)
 	if a.pref.cfg.ConnectionID == "" {
@@ -701,71 +701,60 @@ func (a *App) prefModel(c *ui.Context) ui.Element {
 		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 	})
 	opts := a.defaultModelChoices()
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(5).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(220).MaxWidth(320)
-		lastID := ""
-		for _, opt := range opts {
-			prov, model, connID := opt.provider, opt.model, opt.connID
-			if connID != lastID {
-				lastID = connID
-				ui.Row(c).FillWidth().Height(22).Gap(6).Padding(0, 8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(6, 6).Radius(3).Background(a.connectionColor(a.connByID(connID))).Shrink(0)
-					ui.Text(c, prov).FontSize(12).FontWeight(600).TextColor(p.TextSecondary).SingleLine().Ellipsis("…")
-				})
-			}
-			item := sel.Item(modelChoiceID(connID, model)).Height(22).FillWidth().Gap(8).Padding(0, 8).Radius(4).AlignItems(ui.Center)
-			fg := p.TextPrimary
-			if opt.unavailable {
-				fg = p.TextTertiary
-			}
-			if item.Highlighted() {
-				item.Background(p.AccentDefault)
-				fg = p.TextOnAccent
-			}
-			item.Children(func() {
-				a.modelPickLabel(c, prov, model, fg)
-				if opt.unavailable {
-					ui.Text(c, "Unavailable").FontSize(12).TextColor(fg).SingleLine().Shrink(0)
-				}
+	var items []popEntry
+	lastID := ""
+	for _, opt := range opts {
+		prov, model, connID := opt.provider, opt.model, opt.connID
+		if connID != lastID {
+			lastID = connID
+			dot := a.menuDot(a.connByID(connID))
+			items = append(items, popEntry{
+				Kind: popHeader, Text: prov, Dot: dot,
 			})
 		}
-	})
-	if b.Changed() {
-		connID, model, ok := parseModelChoiceID(a.modelPick)
-		if ok {
-			a.applyDefaultModel(connID, model, c.Now())
-		}
+		id := modelChoiceID(connID, model)
+		unavailable := opt.unavailable
+		items = append(items, popEntry{
+			Kind: popItem, ID: id, Text: prov + " · " + model, Group: prov,
+			Checkable: true, Checked: id == a.modelPick, Disabled: unavailable,
+			Secondary: map[bool]string{true: "Unavailable"}[unavailable],
+			Body: func(c *ui.Context, fg ui.Color) {
+				a.modelPickLabel(c, prov, model, fg)
+			},
+		})
 	}
+	now := c.Now()
+	a.bindPopover(c, "settings-model", b, popSpec{
+		Name:  "Default model",
+		Items: items,
+		OnSelect: func(id string) {
+			a.modelPick = id
+			connID, model, ok := parseModelChoiceID(id)
+			if ok {
+				a.applyDefaultModel(connID, model, now)
+			}
+		},
+	})
 	return b
 }
 
 func (a *App) prefEffort(c *ui.Context) ui.Element {
 	p := a.look
-	sel := ui.SelectBase(c, &a.pref.effort)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("settings-reasoning"))
 	b.Height(22).MinWidth(120).MaxWidth(300).Gap(6).Padding(0, 7, 0, 9).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("Reasoning").Cursor(ui.CursorPointer)
 	b.Children(func() {
 		controlText(c, a.pref.effort, 13, 0, 400, p.TextPrimary).Grow(1).MinWidth(0)
 		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 	})
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(5).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(140)
-		for _, name := range effortOptions {
-			opt := name
-			item := sel.Item(opt).Height(22).FillWidth().Padding(0, 8).Radius(4).AlignItems(ui.Center)
-			fg := p.TextPrimary
-			if item.Highlighted() {
-				item.Background(p.AccentDefault)
-				fg = p.TextOnAccent
-			}
-			item.Children(func() {
-				controlText(c, opt, 13, 0, 400, fg)
-			})
-		}
+	now := c.Now()
+	a.bindPopover(c, "settings-effort", b, popSpec{
+		Name:  "Reasoning",
+		Items: effortMenuEntries(a.pref.effort),
+		OnSelect: func(id string) {
+			a.pref.effort = id
+			a.commitPref(now)
+		},
 	})
-	if b.Changed() {
-		a.commitPref(c.Now())
-	}
 	return b
 }
 

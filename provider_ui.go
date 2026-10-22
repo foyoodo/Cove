@@ -568,31 +568,27 @@ func (a *App) formatPopup(c *ui.Context, current *string, set func(string)) ui.E
 	if strings.TrimSpace(*current) == "" {
 		*current = formatOpenAI
 	}
-	sel := ui.SelectBase(c, current)
-	b := sel.Trigger
+	b := ui.ButtonBase(c.Key("api-format"))
 	b.Height(22).MinWidth(180).MaxWidth(260).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Label("API format").Cursor(ui.CursorPointer)
 	b.Children(func() {
 		controlText(c, formatLabel(*current), 13, 0, 400, p.TextPrimary).Grow(1).MinWidth(0)
 		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
 	})
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(5).Radius(radiusCode).Background(p.LayerOverlay).Border(0.5, p.LayerOverlayBorder).MinWidth(200)
-		for _, id := range []string{formatOpenAI, formatAnthropic} {
-			id := id
-			item := sel.Item(id).Height(22).FillWidth().Padding(0, 8).Radius(4).AlignItems(ui.Center)
-			fg := p.TextPrimary
-			if item.Highlighted() {
-				item.Background(p.AccentDefault)
-				fg = p.TextOnAccent
-			}
-			item.Children(func() {
-				controlText(c, formatLabel(id), 13, 0, 400, fg)
-			})
-		}
-	})
-	if b.Changed() {
-		set(*current)
+	var items []popEntry
+	for _, id := range []string{formatOpenAI, formatAnthropic} {
+		id := id
+		items = append(items, popEntry{
+			Kind: popItem, ID: id, Text: formatLabel(id), Checkable: true, Checked: id == *current,
+		})
 	}
+	a.bindPopover(c, "api-format", b, popSpec{
+		Name:  "API format",
+		Items: items,
+		OnSelect: func(id string) {
+			*current = id
+			set(id)
+		},
+	})
 	return b
 }
 

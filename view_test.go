@@ -217,7 +217,7 @@ func TestRenameSwitchDelete(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Rename"); err != nil {
+	if err := tt.Click("Rename"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
@@ -233,7 +233,7 @@ func TestRenameSwitchDelete(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Delete chat"); err != nil {
+	if err := tt.Click("Delete chat"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("Cancel"); err != nil {
@@ -245,7 +245,7 @@ func TestRenameSwitchDelete(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Delete chat"); err != nil {
+	if err := tt.Click("Delete chat"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("Delete"); err != nil {
@@ -303,7 +303,7 @@ func TestSettingsAndInheritedDefaults(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Chat Settings…"); err != nil {
+	if err := tt.Click("Chat Settings…"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("Last request") {
@@ -777,7 +777,7 @@ func TestLastRequestView(t *testing.T) {
 	if err := tt.Click("More"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("Last request"); err != nil {
+	if err := tt.Click("Last request"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText(`"reasoning_effort": "none"`) || !tt.HasText(`"type": "disabled"`) || !tt.HasText("Hello") {
