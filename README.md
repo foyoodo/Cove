@@ -63,9 +63,27 @@ The `.app` is written to `build/darwin-arm64/`. The build copies `icon/compiled/
 
 `go tool mygo dev` runs the app from source on a Mac.
 
+## Releases and CI
+
+Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64`. MyGo needs no cgo, so the Apple Silicon app cross-compiles on Linux. The workflow uploads `Cove-darwin-arm64.zip` and keeps it for 5 days. Unzipping that archive produces `Cove.app`, with the bundle layout and the executable bit intact.
+
+A release tag has to match `mygo.json`. The release workflow fails when the tag, without the leading `v`, is not the `version` field. `Cove.app` keeps the version from `mygo.json`.
+
+1. Set `version` in `mygo.json` and commit.
+2. Tag that commit and push the tag:
+
+```sh
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+The tag push runs the tests, builds `Cove.app` for `darwin/arm64` on Ubuntu, and publishes `Cove-X.Y.Z-darwin-arm64.zip` and `Cove-X.Y.Z-darwin-arm64.zip.sha256` on a GitHub Release. The notes are the generated changelog plus the install steps: unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The build is unsigned, not notarized, and Apple Silicon only.
+
+A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as a prerelease. To build an existing tag by hand, open Actions, choose Release, run the workflow, and enter the tag, including the leading `v`.
+
 ## Project layout
 
 ```text
+.github/workflows/   CI on pull requests, and the tag release
 *.go                 the app: chat, storage, providers, and the window
 themes/              palettes; tokens.json is the color and layout source
 icon/                compiled Assets.car and the 1024px source PNG
