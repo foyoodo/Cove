@@ -5,10 +5,8 @@ on:
     branches: [main]
   pull_request:
 
-# actions: write lets setup-go save the module and build caches.
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
