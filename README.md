@@ -23,13 +23,13 @@ Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux m
 Homebrew is the recommended install. The cask is `cove` in [foyoodo/tap](https://github.com/foyoodo/homebrew-tap). It installs the arm64 build on Apple Silicon and the universal build on Intel Macs. It needs macOS 13 or newer.
 
 ```sh
-brew tap foyoodo/tap && brew install --cask cove
+brew install --cask foyoodo/tap/cove
 ```
 
-Or install the cask in one command:
+Homebrew 6 requires an explicit trust for a third-party tap. Installing the cask by its full name trusts only that cask. To tap the repository first:
 
 ```sh
-brew install --cask foyoodo/tap/cove
+brew tap foyoodo/tap && brew trust --cask foyoodo/tap/cove && brew install --cask cove
 ```
 
 Upgrade with `brew upgrade --cask cove`. Uninstall with `brew uninstall --cask cove`. Add `--zap` to also remove app data (chats, caches, logs, and preferences). API keys live in the login keychain under the service `dev.cove.chat` and are not removed by `--zap`.
