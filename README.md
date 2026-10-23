@@ -26,7 +26,7 @@ Homebrew is the recommended install. The cask is `cove` in [foyoodo/tap](https:/
 brew install --cask foyoodo/tap/cove
 ```
 
-Homebrew 6 requires an explicit trust for a third-party tap. Installing the cask by its full name trusts only that cask. To tap the repository first:
+Homebrew 6 requires an explicit trust for a third-party tap ([Tap Trust](https://docs.brew.sh/Tap-Trust)). Installing the cask by its full name trusts only that cask. To tap the repository first:
 
 ```sh
 brew tap foyoodo/tap && brew trust --cask foyoodo/tap/cove && brew install --cask cove
