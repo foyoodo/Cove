@@ -52,7 +52,7 @@ Both builds need macOS 13 or newer.
 xattr -dr com.apple.quarantine /Applications/Cove.app
 ```
 
-Use the path where you actually put the `.app`. You can also Control-click the icon in Finder, choose Open, and confirm. macOS will still say the developer cannot be verified. That is expected for an ad-hoc signed app.
+Use the path where you actually put the `.app`. Open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'. macOS will still say the developer cannot be verified. That is expected for an ad-hoc signed app.
 
 A disk image can only be produced on a Mac. A cross-compile produces the `.app`.
 
@@ -99,7 +99,7 @@ A release tag has to match `mygo.json`. The release workflow fails when the tag,
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The tag push runs the tests, builds both apps on Ubuntu, ad-hoc signs them on macOS, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The builds are ad-hoc signed and not notarized. Both need macOS 13 or newer.
+The tag push runs the tests, builds both apps on Ubuntu, ad-hoc signs them on macOS, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'). The builds are ad-hoc signed and not notarized. Both need macOS 13 or newer.
 
 A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as a prerelease. To build an existing tag by hand, open Actions, choose Release, run the workflow, and enter the tag, including the leading `v`.
 

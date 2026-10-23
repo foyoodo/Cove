@@ -201,7 +201,7 @@ jobs:
           xattr -dr com.apple.quarantine /Applications/Cove.app
           ```
 
-          Or Control-click `Cove.app` and choose Open. macOS will say the developer cannot be verified. That is expected for an ad-hoc signed app.
+          Open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'. macOS will say the developer cannot be verified. That is expected for an ad-hoc signed app.
           """
           Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
           PY
