@@ -14,9 +14,9 @@ The current release is 0.7.0.
 
 ## Requirements
 
-The app is built for macOS on Apple Silicon (`darwin/arm64`). It is not a universal binary and does not run on an Intel Mac.
+Cove runs on Apple Silicon and on Intel Macs. The Apple Silicon archive is `darwin/arm64`. Intel Macs need the universal archive, `darwin/universal`, which contains arm64 and x86_64 in one app and also runs on Apple Silicon. Both executables require macOS 13 or newer.
 
-Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux machine can cross-compile the Mac app.
+Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux machine can cross-compile either Mac app, including the fat binary.
 
 ## Install
 
@@ -40,7 +40,9 @@ The tap's cask auto-updates hourly from Cove's GitHub Releases and tracks stable
 
 ### Download a zip
 
-Release builds are an unsigned `Cove.app` inside a zip.
+Release builds are an unsigned `Cove.app` inside a zip. Use `Cove-<version>-darwin-arm64.zip` on Apple Silicon. Use `Cove-<version>-darwin-universal.zip` on an Intel Mac. The universal app also runs on Apple Silicon. The Homebrew cask above stays Apple Silicon only.
+
+The universal executable needs macOS 13 or newer. The Apple Silicon executable has the same Mach-O minimum.
 
 1. Unzip the archive.
 2. Drag `Cove.app` into the Applications folder, or leave it in any directory.
@@ -75,17 +77,18 @@ Settings for the whole app are a separate window. **More → Chat Settings…** 
 
 ```sh
 CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+CGO_ENABLED=0 go tool mygo build -platform darwin/universal
 go test ./...
 go vet ./...
 ```
 
-The `.app` is written to `build/darwin-arm64/`. The build copies `icon/compiled/Assets.car` and `resources/Cove.icns` into the bundle. Those icon files are already compiled; do not regenerate them. `mygo.json` sets the bundle name, the version, and the Info.plist icon keys.
+The Apple Silicon `.app` is written to `build/darwin-arm64/`. The universal `.app` is written to `build/darwin-universal/`. `darwin/universal` compiles arm64 and amd64, then merges them into one fat Mach-O. MyGo does that without `lipo`, so the universal app cross-compiles on Linux. The build copies `icon/compiled/Assets.car` and `resources/Cove.icns` into the bundle. Those icon files are already compiled; do not regenerate them. `mygo.json` sets the bundle name, the version, and the Info.plist icon keys.
 
 `go tool mygo dev` runs the app from source on a Mac.
 
 ## Releases and CI
 
-Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64`. MyGo needs no cgo, so the Apple Silicon app cross-compiles on Linux. The workflow uploads `Cove-darwin-arm64.zip` and keeps it for 5 days. Unzipping that archive produces `Cove.app`, with the bundle layout and the executable bit intact.
+Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal`. MyGo needs no cgo, so both Mac apps cross-compile on Linux. The universal build is what compiles `darwin/amd64`. The workflow uploads `Cove-darwin-arm64.zip` and `Cove-darwin-universal.zip` and keeps them for 5 days. Unzipping either archive produces `Cove.app`, with the bundle layout and the executable bit intact. A macOS job then runs `lipo -info` on the universal zip.
 
 A release tag has to match `mygo.json`. The release workflow fails when the tag, without the leading `v`, is not the `version` field. `Cove.app` keeps the version from `mygo.json`.
 
@@ -96,7 +99,7 @@ A release tag has to match `mygo.json`. The release workflow fails when the tag,
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The tag push runs the tests, builds `Cove.app` for `darwin/arm64` on Ubuntu, and publishes `Cove-X.Y.Z-darwin-arm64.zip` and `Cove-X.Y.Z-darwin-arm64.zip.sha256` on a GitHub Release. The notes are the generated changelog plus the install steps: unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The build is unsigned, not notarized, and Apple Silicon only.
+The tag push runs the tests, builds both apps on Ubuntu, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The builds are unsigned and not notarized. The universal executable needs macOS 13 or newer.
 
 A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as a prerelease. To build an existing tag by hand, open Actions, choose Release, run the workflow, and enter the tag, including the leading `v`.
 

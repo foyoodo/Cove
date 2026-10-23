@@ -61,13 +61,17 @@ jobs:
         # The main package takes several minutes; the default 10m limit is close.
         run: go test -timeout 20m ./...
 
-      # MyGo needs no cgo, so darwin/arm64 cross-compiles on Linux.
-      # The bundle is unsigned and not notarized.
-      - name: Build Cove.app for darwin/arm64
-        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+      # MyGo needs no cgo, so both Mac apps cross-compile on Linux.
+      # darwin/universal compiles arm64 and amd64, then writes one fat
+      # Mach-O. The bundles are unsigned and not notarized.
+      - name: Build Cove.app for darwin/arm64 and darwin/universal
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal
 
       - name: Package Cove.app
         run: .github/scripts/package-darwin-app.sh Cove-darwin-arm64.zip
+
+      - name: Package the universal Cove.app
+        run: .github/scripts/package-darwin-app.sh Cove-darwin-universal.zip darwin-universal
 
       - name: Upload Cove.app
         uses: actions/upload-artifact@v7
@@ -78,3 +82,104 @@ jobs:
           retention-days: 5
           archive: false
           if-no-files-found: error
+
+      - name: Upload the universal Cove.app
+        uses: actions/upload-artifact@v7
+        with:
+          # archive: false names the artifact after this file.
+          path: Cove-darwin-universal.zip
+          retention-days: 5
+          archive: false
+          if-no-files-found: error
+
+  universal-macos:
+    name: Inspect the universal binary
+    needs: ci
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download the universal zip
+        uses: actions/download-artifact@v7
+        with:
+          name: Cove-darwin-universal.zip
+          path: dist
+
+      - name: lipo, file, and Info.plist
+        run: |
+          set -euo pipefail
+          find dist -print
+          if [[ -f dist/Cove-darwin-universal.zip ]]; then
+            unzip -q dist/Cove-darwin-universal.zip -d dist
+          fi
+          exe=""
+          while IFS= read -r candidate; do
+            exe=$candidate
+            break
+          done < <(find dist -type f -path '*/Cove.app/Contents/MacOS/Cove')
+          if [[ -z $exe ]]; then
+            echo "could not find Cove.app in the downloaded artifact" >&2
+            exit 1
+          fi
+          app=$(dirname "$(dirname "$(dirname "$exe")")")
+          info=$(lipo -info "$exe")
+          echo "$info"
+          file "$exe"
+          case $info in
+            *"are:"*arm64*x86_64*|*"are:"*x86_64*arm64*) ;;
+            *)
+              echo "lipo -info did not report both arm64 and x86_64" >&2
+              exit 1
+              ;;
+          esac
+          want=$(python3 -c 'import json; print(json.load(open("mygo.json"))["version"])')
+          short=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
+          bundle=$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")
+          minimum=$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")
+          echo "CFBundleShortVersionString=$short CFBundleVersion=$bundle LSMinimumSystemVersion=$minimum mygo.json=$want"
+          if [[ $short != "$want" || $bundle != "$want" ]]; then
+            echo "Info.plist version does not match mygo.json" >&2
+            exit 1
+          fi
+          printf '%s\n' "$app" > dist/app-path.txt
+
+      # The Go linker ad-hoc-signs the arm64 slice only. An Intel Mac runs
+      # the unsigned x86_64 slice after quarantine is cleared. Rosetta on
+      # Apple Silicon may refuse it. The step records whichever happens.
+      - name: Launch the x86_64 slice under Rosetta
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          app=$(cat dist/app-path.txt)
+          exe=$app/Contents/MacOS/Cove
+          if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          xattr -dr com.apple.quarantine "$app" || true
+          codesign -dv --verbose=2 "$exe" || true
+          log=$(mktemp)
+          arch -x86_64 "$exe" >"$log" 2>&1 &
+          pid=$!
+          slept=0
+          while [[ $slept -lt 8 ]]; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+            slept=$((slept + 1))
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "x86_64 slice still running after ${slept}s"
+            kill "$pid" || true
+            wait "$pid" || true
+            exit 0
+          fi
+          set +e
+          wait "$pid"
+          code=$?
+          set -e
+          echo "x86_64 slice exited after ${slept}s with status $code"
+          cat "$log" || true
+          exit 1

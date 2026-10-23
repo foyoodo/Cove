@@ -102,13 +102,16 @@ jobs:
         # The main package takes several minutes; the default 10m limit is close.
         run: go test -timeout 20m ./...
 
-      - name: Build Cove.app for darwin/arm64
-        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+      - name: Build Cove.app for darwin/arm64 and darwin/universal
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal
 
       - name: Package Cove.app
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-arm64.zip"
+        run: |
+          set -euo pipefail
+          .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-arm64.zip"
+          .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-universal.zip" darwin-universal
 
       - name: Publish the GitHub Release
         env:
@@ -123,11 +126,13 @@ jobs:
           version = os.environ["VERSION"]
           text = f"""## Install
 
-          Cove {version} is an unsigned build for Apple Silicon only (`darwin/arm64`). It is not notarized.
+          Cove {version} is unsigned and not notarized.
 
-          1. Unzip `Cove-{version}-darwin-arm64.zip`.
-          2. Move `Cove.app` to `/Applications`.
-          3. Clear the quarantine flag, then open the app:
+          - Apple Silicon: unzip `Cove-{version}-darwin-arm64.zip`.
+          - Intel Macs: unzip `Cove-{version}-darwin-universal.zip`. That app is a universal binary (arm64 and x86_64) and also runs on Apple Silicon. It needs macOS 13 or newer.
+
+          1. Move `Cove.app` to `/Applications`.
+          2. Clear the quarantine flag, then open the app:
 
           ```sh
           xattr -dr com.apple.quarantine /Applications/Cove.app
@@ -137,7 +142,8 @@ jobs:
           """
           Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
           PY
-          archive="Cove-${VERSION}-darwin-arm64.zip"
+          arm64="Cove-${VERSION}-darwin-arm64.zip"
+          universal="Cove-${VERSION}-darwin-universal.zip"
           args=(
             gh release create "$TAG"
             --verify-tag
@@ -148,5 +154,5 @@ jobs:
           if [[ $VERSION == *-* ]]; then
             args+=(--prerelease)
           fi
-          args+=("$archive" "${archive}.sha256")
+          args+=("$arm64" "${arm64}.sha256" "$universal" "${universal}.sha256")
           "${args[@]}"
