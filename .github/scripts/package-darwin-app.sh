@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Package build/<platform>/Cove.app into a zip that keeps the bundle
 # layout, symlinks, and executable bits, then write a sibling .sha256 file.
-# The version recorded in Info.plist must match mygo.json.
+# The version and LSMinimumSystemVersion recorded in Info.plist must match
+# mygo.json. The macOS release job re-signs this zip before publishing it.
 #
 # platform defaults to darwin-arm64. darwin-universal is the fat arm64+x86_64
 # app from `go tool mygo build -platform darwin/universal`.
@@ -64,6 +65,7 @@ if [[ ! -x $exe ]]; then
 fi
 
 version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' "$root/mygo.json")
+minimum=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["macos"]["minimumSystemVersion"])' "$root/mygo.json")
 
 # zip -y stores symlinks as links. Dropping it copies the target instead,
 # which breaks a bundle that links into itself. One function is the only
@@ -108,10 +110,10 @@ stage=$(mktemp -d)
 trap "rm -rf $(printf '%q' "$fixture") $(printf '%q' "$stage")" EXIT
 unzip -q "$archive" -d "$stage"
 
-python3 - "$archive" "$app_dir" "$stage" "$version" <<'PY'
+python3 - "$archive" "$app_dir" "$stage" "$version" "$minimum" <<'PY'
 import os, plistlib, stat, sys, zipfile
 
-archive, app_dir, stage, version = sys.argv[1:]
+archive, app_dir, stage, version, minimum = sys.argv[1:]
 exe = "Cove.app/Contents/MacOS/Cove"
 required = (
     "Cove.app/Contents/Info.plist",
@@ -134,6 +136,12 @@ with zipfile.ZipFile(archive) as z:
         sys.exit(
             f"Info.plist version short={short!r} bundle={bundle!r} "
             f"does not match mygo.json {version!r}"
+        )
+    got_min = plist.get("LSMinimumSystemVersion")
+    if got_min != minimum:
+        sys.exit(
+            f"LSMinimumSystemVersion {got_min!r} does not match "
+            f"mygo.json macos.minimumSystemVersion {minimum!r}"
         )
     exe_mode = unix_mode(infos[exe])
     if exe_mode & 0o111 == 0:
@@ -193,7 +201,7 @@ for dirpath, dirnames, filenames in os.walk(app_dir, followlinks=False):
         if os.readlink(unpacked) != os.readlink(full):
             sys.exit(f"unzipped {rel} points at {os.readlink(unpacked)!r}")
 
-print(f"{exe} mode {exe_mode:o} in {os.path.basename(archive)}; version {version}")
+print(f"{exe} mode {exe_mode:o} in {os.path.basename(archive)}; version {version}; minimum {minimum}")
 PY
 
 cmp "$exe" "$stage/Cove.app/Contents/MacOS/Cove"

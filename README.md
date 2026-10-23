@@ -14,13 +14,13 @@ The current release is 0.7.0.
 
 ## Requirements
 
-Cove runs on Apple Silicon and on Intel Macs. The Apple Silicon archive is `darwin/arm64`. Intel Macs need the universal archive, `darwin/universal`, which contains arm64 and x86_64 in one app and also runs on Apple Silicon. Both executables require macOS 13 or newer.
+Cove runs on Apple Silicon and on Intel Macs. The Apple Silicon archive is `darwin/arm64`. Intel Macs need the universal archive, `darwin/universal`, which contains arm64 and x86_64 in one app and also runs on Apple Silicon. Both need macOS 13 or newer. Info.plist records that as `LSMinimumSystemVersion`, which is what Finder enforces.
 
 Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux machine can cross-compile either Mac app, including the fat binary.
 
 ## Install
 
-Homebrew is the recommended install. The cask is `cove` in [foyoodo/tap](https://github.com/foyoodo/homebrew-tap). It is Apple Silicon (`arm64`) only and needs macOS 12 or newer.
+Homebrew is the recommended install. The cask is `cove` in [foyoodo/tap](https://github.com/foyoodo/homebrew-tap). It installs the arm64 build on Apple Silicon and the universal build on Intel Macs. It needs macOS 13 or newer.
 
 ```sh
 brew tap foyoodo/tap && brew install --cask cove
@@ -34,15 +34,15 @@ brew install --cask foyoodo/tap/cove
 
 Upgrade with `brew upgrade --cask cove`. Uninstall with `brew uninstall --cask cove`. Add `--zap` to also remove app data (chats, caches, logs, and preferences). API keys live in the login keychain under the service `dev.cove.chat` and are not removed by `--zap`.
 
-The app is unsigned and not notarized. The cask clears the quarantine attribute, so a Homebrew install opens directly. Only a zip install needs the Gatekeeper step below.
+The app is ad-hoc signed and not notarized. The cask clears the quarantine attribute, so a Homebrew install opens directly. Only a zip install needs the Gatekeeper step below.
 
 The tap's cask auto-updates hourly from Cove's GitHub Releases and tracks stable releases. Until the first stable release exists, it points at the newest prerelease.
 
 ### Download a zip
 
-Release builds are an unsigned `Cove.app` inside a zip. Use `Cove-<version>-darwin-arm64.zip` on Apple Silicon. Use `Cove-<version>-darwin-universal.zip` on an Intel Mac. The universal app also runs on Apple Silicon. The Homebrew cask above stays Apple Silicon only.
+Release builds are an ad-hoc signed `Cove.app` inside a zip. Use `Cove-<version>-darwin-arm64.zip` on Apple Silicon. Use `Cove-<version>-darwin-universal.zip` on an Intel Mac. The universal app also runs on Apple Silicon. The Homebrew cask installs those same two builds.
 
-The universal executable needs macOS 13 or newer. The Apple Silicon executable has the same Mach-O minimum.
+Both builds need macOS 13 or newer.
 
 1. Unzip the archive.
 2. Drag `Cove.app` into the Applications folder, or leave it in any directory.
@@ -52,7 +52,7 @@ The universal executable needs macOS 13 or newer. The Apple Silicon executable h
 xattr -dr com.apple.quarantine /Applications/Cove.app
 ```
 
-Use the path where you actually put the `.app`. You can also Control-click the icon in Finder, choose Open, and confirm. macOS will still say the developer cannot be verified. That is expected for an unsigned app.
+Use the path where you actually put the `.app`. You can also Control-click the icon in Finder, choose Open, and confirm. macOS will still say the developer cannot be verified. That is expected for an ad-hoc signed app.
 
 A disk image can only be produced on a Mac. A cross-compile produces the `.app`.
 
@@ -88,7 +88,7 @@ The Apple Silicon `.app` is written to `build/darwin-arm64/`. The universal `.ap
 
 ## Releases and CI
 
-Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal`. MyGo needs no cgo, so both Mac apps cross-compile on Linux. The universal build is what compiles `darwin/amd64`. The workflow uploads `Cove-darwin-arm64.zip` and `Cove-darwin-universal.zip` and keeps them for 5 days. Unzipping either archive produces `Cove.app`, with the bundle layout and the executable bit intact. A macOS job then runs `lipo -info` on the universal zip.
+Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal`. MyGo needs no cgo, so both Mac apps cross-compile on Linux. The universal build is what compiles `darwin/amd64`. A macOS job then ad-hoc signs both bundles with `codesign --force --deep -s -`, checks `lipo -info` and `codesign --verify --deep --strict`, and launches the arm64 slice and the x86_64 slice under Rosetta. That job fails the workflow if any of those checks fail. It uploads `Cove-darwin-arm64.zip` and `Cove-darwin-universal.zip` and keeps them for 5 days.
 
 A release tag has to match `mygo.json`. The release workflow fails when the tag, without the leading `v`, is not the `version` field. `Cove.app` keeps the version from `mygo.json`.
 
@@ -99,7 +99,7 @@ A release tag has to match `mygo.json`. The release workflow fails when the tag,
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The tag push runs the tests, builds both apps on Ubuntu, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The builds are unsigned and not notarized. The universal executable needs macOS 13 or newer.
+The tag push runs the tests, builds both apps on Ubuntu, ad-hoc signs them on macOS, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or Control-click and choose Open). The builds are ad-hoc signed and not notarized. Both need macOS 13 or newer.
 
 A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as a prerelease. To build an existing tag by hand, open Actions, choose Release, run the workflow, and enter the tag, including the leading `v`.
 
@@ -115,7 +115,7 @@ tools/inkgap/        glyph-ink measurement used by the layout
 testdata/            images the layout tests open
 notices/             generator for third_party_notices.txt
 DESIGN.md            short visual overview
-mygo.json            bundle name, version, and icon
+mygo.json            bundle name, version, minimum macOS, and icon
 ```
 
 `themes/tokens.json` is embedded in the binary. Components take colors from it rather than from literals in the UI code.
