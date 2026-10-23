@@ -61,20 +61,62 @@ jobs:
         # The main package takes several minutes; the default 10m limit is close.
         run: go test -timeout 20m ./...
 
-      # MyGo needs no cgo, so darwin/arm64 cross-compiles on Linux.
-      # The bundle is unsigned and not notarized.
-      - name: Build Cove.app for darwin/arm64
-        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+      # MyGo needs no cgo, so both Mac apps cross-compile on Linux.
+      # darwin/universal compiles arm64 and amd64, then writes one fat
+      # Mach-O. The macOS job ad-hoc signs the bundles that ship.
+      - name: Build Cove.app for darwin/arm64 and darwin/universal
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal
 
       - name: Package Cove.app
         run: .github/scripts/package-darwin-app.sh Cove-darwin-arm64.zip
 
-      - name: Upload Cove.app
+      - name: Package the universal Cove.app
+        run: .github/scripts/package-darwin-app.sh Cove-darwin-universal.zip darwin-universal
+
+      - name: Upload unsigned Cove.app builds
         uses: actions/upload-artifact@v7
         with:
-          # archive: false keeps the zip made above, including symlink
-          # entries and the executable bit, instead of wrapping it again.
-          path: Cove-darwin-arm64.zip
+          name: unsigned-darwin-apps
+          path: |
+            Cove-darwin-arm64.zip
+            Cove-darwin-universal.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  sign-macos:
+    name: Sign, verify, and launch
+    needs: ci
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download unsigned builds
+        uses: actions/download-artifact@v7
+        with:
+          name: unsigned-darwin-apps
+          path: dist
+
+      - name: Ad-hoc sign, verify, and launch
+        run: |
+          set -euo pipefail
+          find dist -print
+          chmod +x .github/scripts/sign-darwin-apps.sh
+          .github/scripts/sign-darwin-apps.sh \
+            dist/Cove-darwin-arm64.zip \
+            dist/Cove-darwin-universal.zip \
+            signed/Cove-darwin-arm64.zip \
+            signed/Cove-darwin-universal.zip
+
+      - name: Upload signed Cove.app zips
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-darwin-apps
+          path: |
+            signed/Cove-darwin-arm64.zip
+            signed/Cove-darwin-arm64.zip.sha256
+            signed/Cove-darwin-universal.zip
+            signed/Cove-darwin-universal.zip.sha256
           retention-days: 5
-          archive: false
           if-no-files-found: error

@@ -21,12 +21,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
+  build:
+    name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Check out
         uses: actions/checkout@v7
@@ -102,19 +103,84 @@ jobs:
         # The main package takes several minutes; the default 10m limit is close.
         run: go test -timeout 20m ./...
 
-      - name: Build Cove.app for darwin/arm64
-        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+      - name: Build Cove.app for darwin/arm64 and darwin/universal
+        run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal
 
       - name: Package Cove.app
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-arm64.zip"
+        run: |
+          set -euo pipefail
+          .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-arm64.zip"
+          .github/scripts/package-darwin-app.sh "Cove-${VERSION}-darwin-universal.zip" darwin-universal
+
+      - name: Upload unsigned Cove.app builds
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-darwin-apps
+          path: |
+            Cove-${{ steps.version.outputs.version }}-darwin-arm64.zip
+            Cove-${{ steps.version.outputs.version }}-darwin-universal.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    name: Sign, verify, and launch
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download unsigned builds
+        uses: actions/download-artifact@v7
+        with:
+          name: unsigned-darwin-apps
+          path: dist
+
+      - name: Ad-hoc sign, verify, and launch
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          find dist -print
+          chmod +x .github/scripts/sign-darwin-apps.sh
+          .github/scripts/sign-darwin-apps.sh \
+            "dist/Cove-${VERSION}-darwin-arm64.zip" \
+            "dist/Cove-${VERSION}-darwin-universal.zip" \
+            "signed/Cove-${VERSION}-darwin-arm64.zip" \
+            "signed/Cove-${VERSION}-darwin-universal.zip"
+
+      - name: Upload signed Cove.app zips
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-darwin-apps
+          path: signed/
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed builds
+        uses: actions/download-artifact@v7
+        with:
+          name: signed-darwin-apps
+          path: signed
 
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -123,21 +189,29 @@ jobs:
           version = os.environ["VERSION"]
           text = f"""## Install
 
-          Cove {version} is an unsigned build for Apple Silicon only (`darwin/arm64`). It is not notarized.
+          Cove {version} is ad-hoc signed and not notarized. It needs macOS 13 or newer.
 
-          1. Unzip `Cove-{version}-darwin-arm64.zip`.
-          2. Move `Cove.app` to `/Applications`.
-          3. Clear the quarantine flag, then open the app:
+          - Apple Silicon: unzip `Cove-{version}-darwin-arm64.zip`.
+          - Intel Macs: unzip `Cove-{version}-darwin-universal.zip`. That app is a universal binary (arm64 and x86_64) and also runs on Apple Silicon.
+
+          1. Move `Cove.app` to `/Applications`.
+          2. Clear the quarantine flag, then open the app:
 
           ```sh
           xattr -dr com.apple.quarantine /Applications/Cove.app
           ```
 
-          Or Control-click `Cove.app` and choose Open. macOS will say the developer cannot be verified. That is expected for an unsigned app.
+          Open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'. macOS will say the developer cannot be verified. That is expected for an ad-hoc signed app.
           """
           Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
           PY
-          archive="Cove-${VERSION}-darwin-arm64.zip"
+          arm64=$(find signed -name "Cove-${VERSION}-darwin-arm64.zip" -print -quit)
+          universal=$(find signed -name "Cove-${VERSION}-darwin-universal.zip" -print -quit)
+          if [[ -z $arm64 || -z $universal || ! -f ${arm64}.sha256 || ! -f ${universal}.sha256 ]]; then
+            echo "signed artifacts are missing" >&2
+            find signed -print >&2
+            exit 1
+          fi
           args=(
             gh release create "$TAG"
             --verify-tag
@@ -148,5 +222,5 @@ jobs:
           if [[ $VERSION == *-* ]]; then
             args+=(--prerelease)
           fi
-          args+=("$archive" "${archive}.sha256")
+          args+=("$arm64" "${arm64}.sha256" "$universal" "${universal}.sha256")
           "${args[@]}"

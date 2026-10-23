@@ -6,6 +6,7 @@
   "out": "build",
   "macos": {
     "icon": "icon/compiled/Assets.car",
+    "minimumSystemVersion": "13.0",
     "infoPlist": {
       "CFBundleIconName": "Cove",
       "CFBundleIconFile": "Cove"
