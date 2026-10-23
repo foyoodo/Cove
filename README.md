@@ -20,6 +20,26 @@ Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux m
 
 ## Install
 
+Homebrew is the recommended install. The cask is `cove` in [foyoodo/tap](https://github.com/foyoodo/homebrew-tap). It is Apple Silicon (`arm64`) only and needs macOS 12 or newer.
+
+```sh
+brew tap foyoodo/tap && brew install --cask cove
+```
+
+Or install the cask in one command:
+
+```sh
+brew install --cask foyoodo/tap/cove
+```
+
+Upgrade with `brew upgrade --cask cove`. Uninstall with `brew uninstall --cask cove`. Add `--zap` to also remove app data (chats, caches, logs, and preferences). API keys live in the login keychain under the service `dev.cove.chat` and are not removed by `--zap`.
+
+The app is unsigned and not notarized. The cask clears the quarantine attribute, so a Homebrew install opens directly. Only a zip install needs the Gatekeeper step below.
+
+The tap's cask auto-updates hourly from Cove's GitHub Releases and tracks stable releases. Until the first stable release exists, it points at the newest prerelease.
+
+### Download a zip
+
 Release builds are an unsigned `Cove.app` inside a zip.
 
 1. Unzip the archive.
