@@ -121,9 +121,10 @@ func (a *App) maybeAutoTitle(convID string) {
 	}
 }
 
-// regenerateTitle asks for a new title for id. dimBar is set for the
-// More menu, which is already showing that chat. A sidebar menu passes
-// false: only that row changes, and the current chat stays put.
+// regenerateTitle asks for a new title for id. dimBar greys the title
+// bar along with the sidebar row. That is the More menu, and a sidebar
+// menu on the chat already on screen. A sidebar menu on another chat
+// leaves the title bar alone and does not switch to that chat.
 func (a *App) regenerateTitle(id string, dimBar bool) {
 	a.ensureChat(id)
 	conv := a.conversation(id)
@@ -909,9 +910,12 @@ func isEmojiRune(r rune) bool {
 	}
 	// Emoji live in these blocks. Go's unicode package here has no
 	// Extended_Pictographic table, so the blocks stand in for it.
-	switch {
-	case r >= 0x2300 && r <= 0x23FF: // ⌚ ⏰
+	// U+2300 is Miscellaneous Technical: key marks such as ⌘ ⌥ ⌃ stay,
+	// and only the emoji in that block are listed in isTechnicalEmoji.
+	if isTechnicalEmoji(r) {
 		return true
+	}
+	switch {
 	case r >= 0x25A0 && r <= 0x25FF:
 		return true
 	case r >= 0x2600 && r <= 0x27BF:
@@ -925,6 +929,20 @@ func isEmojiRune(r rune) bool {
 	default:
 		return false
 	}
+}
+
+// isTechnicalEmoji reports the pictographs in U+2300–U+23FF. The rest
+// of that block is technical signs (⌘ ⌥ ⌃ ⌫ and the like) and stays in
+// a title.
+func isTechnicalEmoji(r rune) bool {
+	switch r {
+	case 0x231A, 0x231B, 0x23CF: // ⌚ ⌛ ⏏
+		return true
+	}
+	if r >= 0x23E9 && r <= 0x23F3 || r >= 0x23F8 && r <= 0x23FA {
+		return true
+	}
+	return false
 }
 
 func runeWidth(r rune) int {

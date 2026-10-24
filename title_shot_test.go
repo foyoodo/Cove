@@ -11,7 +11,7 @@ import (
 )
 
 func TestTitleScreenshots(t *testing.T) {
-	dir := testArtifactDir(t, "")
+	dir := testArtifactDir(t, "auto-title")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,7 @@ func TestTitleScreenshots(t *testing.T) {
 	done := "Cancel HTTP on close"
 
 	temp := titleShotApp(t, long)
+	assertSingleTurn(t, temp, long)
 	tt := ui.NewTester(temp.view, shotW, shotH)
 	if !tt.HasText(long) || !tt.HasText("Tie the request to a context") {
 		t.Fatalf("temp shot missing title or transcript: %q", tt.Texts())
@@ -38,6 +39,7 @@ func TestTitleScreenshots(t *testing.T) {
 	pair(tt, "title-temp")
 
 	fading := titleShotApp(t, done)
+	assertSingleTurn(t, fading, long)
 	tf := ui.NewTester(fading.view, shotW, shotH)
 	// Settle the theme before the cross-fade. SetDark while instant is
 	// false starts the theme animation, and the dark frame was captured
@@ -63,6 +65,7 @@ func TestTitleScreenshots(t *testing.T) {
 	tf.SetDark(false)
 
 	settled := titleShotApp(t, done)
+	assertSingleTurn(t, settled, long)
 	ts := ui.NewTester(settled.view, shotW, shotH)
 	if !ts.HasText(done) {
 		t.Fatalf("done shot: %q", ts.Texts())
@@ -82,7 +85,12 @@ func TestTitleScreenshots(t *testing.T) {
 	pair(ff, "title-fail")
 
 	regen := titleShotApp(t, done)
+	// Current chat, as the sidebar menu sets it: the row and the title bar
+	// both go grey, and the time column is the 10pt spinner.
 	regen.titleJobs = map[string]*titleJob{"cancel": {gen: 1, manual: true, bar: true}}
+	if !regen.titleDimmed("cancel", true) || !regen.titleDimmed("cancel", false) {
+		t.Fatal("current chat should dim the title bar and the sidebar row")
+	}
 	tr := ui.NewTester(regen.view, shotW, shotH)
 	if !tr.HasText(titleGenerating) {
 		t.Fatalf("regen shot missing spinner label: %q", tr.Texts())
@@ -140,6 +148,34 @@ func TestTitleScreenshots(t *testing.T) {
 	}
 	pair(tm, "more-menu")
 
+	kb := titleShotApp(t, done)
+	tk := ui.NewTester(kb.view, shotW, shotH)
+	openMoreFromKeyboard(t, tk)
+	pair(tk, "more-menu-kb")
+
+	streaming := titleShotApp(t, done)
+	streaming.streams = map[string]*convStream{"cancel": {gen: 1, cancel: func() {}}}
+	tstream := ui.NewTester(streaming.view, shotW, shotH)
+	if !tstream.HasText("Generating") {
+		t.Fatalf("streaming sidebar: %q", tstream.Texts())
+	}
+	if err := tstream.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range kindMarks(t, tstream, "more") {
+		if row.label == titleRegenLabel && row.on {
+			t.Fatal("Regenerate Title stayed enabled while a reply is streaming")
+		}
+	}
+	pair(tstream, "more-menu-stream")
+
+	narrow := titleShotApp(t, done)
+	tn := ui.NewTester(narrow.view, 720, 520)
+	if err := tn.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	pair(tn, "more-menu-min")
+
 	settings := titleSettingsApp(t, true, nil)
 	tset := ui.NewTester(settings.settingsWindowRoot, 780, 560)
 	scrollTitlesIntoView(t, settings, tset)
@@ -155,6 +191,11 @@ func TestTitleScreenshots(t *testing.T) {
 	scrollTitlesIntoView(t, off, toff)
 	pair(toff, "settings-titles-off")
 
+	minSet := titleSettingsApp(t, true, nil)
+	tmin := ui.NewTester(minSet.settingsWindowRoot, 720, 520)
+	scrollTitlesIntoView(t, minSet, tmin)
+	pair(tmin, "settings-titles-min")
+
 	menuApp := titleSettingsApp(t, true, nil)
 	tmenu := ui.NewTester(menuApp.settingsWindowRoot, 780, 560)
 	scrollTitlesIntoView(t, menuApp, tmenu)
@@ -164,10 +205,59 @@ func TestTitleScreenshots(t *testing.T) {
 	if !tmenu.HasText("Models & Providers…") || !tmenu.HasText("gpt-4o-mini") {
 		t.Fatalf("title model menu: %q", tmenu.Texts())
 	}
-	if r, ok := tmenu.Find("gpt-4o-mini"); ok {
-		tmenu.Move(r.X+r.W/2, r.Y+r.H/2)
+	var mini ui.Rect
+	for _, row := range kindMarks(t, tmenu, "title") {
+		if row.label == "gpt-4o-mini" {
+			mini = row.rect
+		}
+	}
+	if mini.W < 8 {
+		t.Fatal("gpt-4o-mini row missing from the title model menu")
+	}
+	tmenu.Move(mini.X+mini.W/2, mini.Y+mini.H/2)
+	// The row under the pointer takes the highlight on the following frame.
+	tmenu.Frame()
+	if hot := hotLabeled(kindMarks(t, tmenu, "title")); hot.label != "gpt-4o-mini" {
+		t.Fatalf("title model hover highlight %q, want gpt-4o-mini", hot.label)
 	}
 	pair(tmenu, "title-model-menu")
+
+	searchApp := titleSettingsApp(t, true, nil)
+	for i := range searchApp.data.Connections {
+		if searchApp.data.Connections[i].ID != "openai" {
+			continue
+		}
+		searchApp.data.Connections[i].Models = append(searchApp.data.Connections[i].Models,
+			ProviderModel{ID: "gpt-4.1", Enabled: true},
+			ProviderModel{ID: "gpt-4.1-mini", Enabled: true},
+		)
+	}
+	tsr := ui.NewTester(searchApp.settingsWindowRoot, 780, 560)
+	scrollTitlesIntoView(t, searchApp, tsr)
+	if err := tsr.Click("Title model, " + titleSameAsChat); err != nil {
+		t.Fatal(err)
+	}
+	if !tsr.HasText("Search models") {
+		t.Fatal("ten models did not show the search field")
+	}
+	tsr.Type("claude")
+	if !tsr.HasText("claude-sonnet-4.5") {
+		t.Fatalf("title model search: %q", tsr.Texts())
+	}
+	for _, row := range kindMarks(t, tsr, "title") {
+		if strings.Contains(strings.ToLower(row.label), "gpt") || strings.Contains(strings.ToLower(row.label), "deepseek") || row.label == titleSameAsChat {
+			t.Fatalf("search kept %q", row.label)
+		}
+	}
+	pair(tsr, "title-model-search")
+
+	picked := titleSettingsApp(t, true, &TitleModel{ProviderID: "anthropic", ModelID: "claude-sonnet-4.5"})
+	tpick := ui.NewTester(picked.settingsWindowRoot, 780, 560)
+	scrollTitlesIntoView(t, picked, tpick)
+	if _, ok := tpick.Find("Title model, claude-sonnet-4.5"); !ok {
+		t.Fatalf("picked title model: %q", tpick.Texts())
+	}
+	pair(tpick, "title-model-picked")
 
 	gone := &TitleModel{ProviderID: "missing", ModelID: "grok-4-fast"}
 	unavail := titleSettingsApp(t, true, gone)
@@ -187,6 +277,51 @@ func TestTitleScreenshots(t *testing.T) {
 		t.Fatalf("unavailable menu: %q", tu2.Texts())
 	}
 	pair(tu2, "title-model-unavail-menu")
+}
+
+func assertSingleTurn(t *testing.T, a *App, question string) {
+	t.Helper()
+	conv := a.conversation("cancel")
+	if conv == nil {
+		t.Fatal("missing shot chat")
+	}
+	users, replies := 0, 0
+	var first string
+	for _, m := range conv.Messages {
+		switch m.Role {
+		case roleUser:
+			users++
+			if first == "" {
+				first = m.Content
+			}
+		case roleAssistant:
+			replies++
+		}
+	}
+	if users != 1 || replies != 1 {
+		t.Fatalf("shot chat has %d user messages and %d replies", users, replies)
+	}
+	if temporaryTitle(first) != question {
+		t.Fatalf("temporary title %q, want the first line %q", temporaryTitle(first), question)
+	}
+}
+
+func openMoreFromKeyboard(t *testing.T, tt *ui.Tester) {
+	t.Helper()
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyEscape)
+	if moreOpen(tt) {
+		t.Fatal("Escape left More open")
+	}
+	if !tt.Focused("More") {
+		t.Fatal("Escape did not return focus to More")
+	}
+	tt.Key(0, ui.KeySpace)
+	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {
+		t.Fatalf("keyboard More highlight %q", hot.label)
+	}
 }
 
 func scrollTitlesIntoView(t *testing.T, a *App, tt *ui.Tester) {
@@ -356,8 +491,6 @@ func titleShotApp(t *testing.T, title string) *App {
 				SystemPrompt: "Answer concisely. Prefer Go examples.",
 			},
 			Messages: []Message{
-				{ID: "u0", Role: roleUser, Content: "What’s the difference between Client.Timeout and a context deadline?", Done: true, CreatedAt: stamp.Add(-10 * time.Minute)},
-				{ID: "a0", Role: roleAssistant, Content: "`Client.Timeout` bounds the whole exchange — dial, headers and reading the body — and applies to every request the client makes. A context deadline belongs to one request and can be cancelled early.", Model: "claude-sonnet-4.5", ProviderName: "Anthropic", ProviderKind: "Anthropic", ProviderID: "anthropic", Tokens: 640, ElapsedMS: 2100, Done: true, CreatedAt: stamp.Add(-10 * time.Minute)},
 				{ID: "u", Role: roleUser, Content: "How do I cancel an in-flight HTTP request when the window closes?", Done: true, CreatedAt: stamp},
 				{ID: "a", Role: roleAssistant, Content: reply, Reasoning: "The user wants cancellation tied to the window lifecycle.", ThinkingMS: 12000, Model: "claude-sonnet-4.5", ProviderName: "Anthropic", ProviderKind: "Anthropic", ProviderID: "anthropic", Tokens: 1200, ElapsedMS: 3400, Done: true, CreatedAt: stamp},
 			},

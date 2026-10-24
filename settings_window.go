@@ -451,11 +451,13 @@ func (a *App) titleModelEntries() (items, footer []popEntry, search bool) {
 	items = append(items, popEntry{
 		Kind: popItem, ID: titleModelSame, Text: titleSameAsChat,
 		Checkable: true, Checked: sameOn,
+		MarkKind: "title", MarkModel: titleSameAsChat, MarkOn: true,
 	})
 	if unavailable {
 		items = append(items, popEntry{
 			Kind: popItem, ID: modelChoiceID(ref.ProviderID, ref.ModelID), Text: ref.ModelID,
 			Checkable: true, Checked: true, Disabled: true, Secondary: titleUnavailable,
+			MarkKind: "title", MarkModel: ref.ModelID, MarkOn: false,
 		})
 	}
 	items = append(items, popEntry{Kind: popSep})
@@ -475,6 +477,7 @@ func (a *App) titleModelEntries() (items, footer []popEntry, search bool) {
 		items = append(items, popEntry{
 			Kind: popItem, ID: id, Text: opt.model, Group: opt.provider,
 			Checkable: true, Checked: on,
+			MarkKind: "title", MarkProv: opt.provider, MarkModel: opt.model, MarkOn: true,
 		})
 	}
 	footer = []popEntry{{

@@ -438,7 +438,9 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 			regen.Disabled(true)
 		}
 		if regen.Chosen() {
-			a.regenerateTitle(id, false)
+			// Another chat stays in the sidebar only. The open chat greys
+			// its title bar in the same frame as its row.
+			a.regenerateTitle(id, id == a.data.ActiveID)
 		}
 		m.Separator()
 		if m.Item("Delete").Chosen() {

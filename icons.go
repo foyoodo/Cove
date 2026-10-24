@@ -42,8 +42,9 @@ var (
 	iconEye      = icon(`<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>`)
 	iconEyeOff   = icon(`<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>`)
 	iconAlert    = icon(`<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>`)
-	// iconTitleSpin is a 10pt arc. Stroke 3.6 in the 24-box is 1.5pt at that size.
-	iconTitleSpin = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round"><path d="M12 3.2a8.8 8.8 0 1 1-7.6 13.4"/></svg>`))
+	// iconTitleSpin is drawn at 10pt. The arc's outer edge fills that box,
+	// and stroke 3.6 in the 24-box is 1.5pt at that size.
+	iconTitleSpin = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round"><path d="M12 1.8a10.2 10.2 0 1 1-8.81 15.53"/></svg>`))
 	iconCheck     = icon(`<path d="M20 6 9 17l-5-5"/>`)
 	iconDown      = icon(`<path d="M12 5v14"/><path d="m18 13-6 6-6-6"/>`)
 	// plus.bubble is the New Session glyph: a 24-box stroke of 1.8, drawn at 15.

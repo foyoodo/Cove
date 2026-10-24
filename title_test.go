@@ -41,6 +41,11 @@ func TestSanitizeTitle(t *testing.T) {
 		{in: "Ship it 🚀", want: "Ship it", ok: true},
 		{in: "⭐ Ship", want: "Ship", ok: true},
 		{in: "⏰ Wake", want: "Wake", ok: true},
+		{in: "⌚ time", want: "time", ok: true},
+		{in: "Save with ⌘S", want: "Save with ⌘S", ok: true},
+		{in: "⌘⌥⌃⇧", want: "⌘⌥⌃⇧", ok: true},
+		{in: "Press ⌘⌫", want: "Press ⌘⌫", ok: true},
+		{in: "⏰ then ⌘K", want: "then ⌘K", ok: true},
 		{in: "⬆ Up", want: "Up", ok: true},
 		{in: "© Copy", want: "Copy", ok: true},
 		{in: "©️ Copy", want: "Copy", ok: true},
@@ -824,4 +829,143 @@ func runTitleAsync(t *testing.T, start func(*App), during func(*App), release bo
 	}
 	titleComplete = prev
 	check(a)
+}
+
+// TestSidebarRegenerateDimsCurrentTitleBar is the sidebar context menu.
+// The chat already on screen greys the title bar with its row. Another
+// chat only spins in the sidebar, and the open chat stays put.
+func TestSidebarRegenerateDimsCurrentTitleBar(t *testing.T) {
+	question := "How do I cancel an in-flight HTTP request when the window closes?"
+	a := titleShotApp(t, question)
+	tt := ui.NewTester(a.view, 1120, 760)
+	prev := titleComplete
+	t.Cleanup(func() { titleComplete = prev })
+
+	check := func(id string, wantBar bool) {
+		t.Helper()
+		titleComplete = func(context.Context, Config, []byte) (string, error) {
+			job := a.titleJobs[id]
+			if job == nil || !job.manual || job.bar != wantBar {
+				t.Errorf("job for %s = %#v, want manual bar=%v", id, job, wantBar)
+			}
+			if a.data.ActiveID != "cancel" {
+				t.Errorf("active chat changed to %s", a.data.ActiveID)
+			}
+			return "", errors.New("stopped")
+		}
+	}
+	rowLabel := func(id string) string {
+		t.Helper()
+		conv := a.conversation(id)
+		when := conv.UpdatedAt
+		meta := sidebarWhen(tt.Now(), when)
+		return conv.Title + ", " + meta
+	}
+
+	check("cancel", true)
+	if err := tt.RightClick(rowLabel("cancel")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(titleRegenLabel); err != nil {
+		t.Fatal(err)
+	}
+
+	check("greet", false)
+	if err := tt.RightClick(rowLabel("greet")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(titleRegenLabel); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTitleModelHoverFollowsPointer is SPEC §11.3.4: the pointer and the
+// keyboard share one highlight. Opening paints the current row. The next
+// frame after the pointer moves onto another row follows it.
+func TestTitleModelHoverFollowsPointer(t *testing.T) {
+	a := titleSettingsApp(t, true, nil)
+	tt := ui.NewTester(a.settingsWindowRoot, 780, 560)
+	scrollTitlesIntoView(t, a, tt)
+	if err := tt.Click("Title model, " + titleSameAsChat); err != nil {
+		t.Fatal(err)
+	}
+	if hot := hotLabeled(kindMarks(t, tt, "title")); hot.label != titleSameAsChat {
+		t.Fatalf("open highlight %q", hot.label)
+	}
+	var row ui.Rect
+	for _, r := range kindMarks(t, tt, "title") {
+		if r.label == "gpt-4o-mini" {
+			row = r.rect
+		}
+	}
+	if row.W < 8 {
+		t.Fatal("gpt-4o-mini row missing")
+	}
+	tt.Move(row.X+row.W/2, row.Y+row.H/2)
+	tt.Frame()
+	hot := hotLabeled(kindMarks(t, tt, "title"))
+	if hot.label != "gpt-4o-mini" {
+		t.Fatalf("hover highlight %q, want gpt-4o-mini", hot.label)
+	}
+	still := false
+	for _, r := range kindMarks(t, tt, "title") {
+		if r.label == titleSameAsChat && r.checked {
+			still = true
+		}
+	}
+	if !still {
+		t.Fatal("Same as Chat lost its check when the highlight moved")
+	}
+}
+
+// TestTitleSpinnerIsTenPoints checks the sidebar spinner. The box is 10pt
+// and the arc's ink fills that box; a smaller path reads as about 8pt.
+func TestTitleSpinnerIsTenPoints(t *testing.T) {
+	a := titleShotApp(t, "Cancel HTTP on close")
+	a.titleJobs = map[string]*titleJob{"cancel": {gen: 1, manual: true, bar: true}}
+	tt := ui.NewTester(a.view, 1120, 760)
+	r, ok := tt.Find(titleGenerating)
+	if !ok {
+		t.Fatal("spinner missing")
+	}
+	if r.W < 9.5 || r.W > 10.5 || r.H < 9.5 || r.H > 10.5 {
+		t.Fatalf("spinner box %.2fx%.2f, want 10pt", r.W, r.H)
+	}
+	img := tt.Image()
+	bx, by := int(r.X)-3, int(r.Y+r.H/2)
+	br, bg, bb, _ := img.At(bx, by).RGBA()
+	minX, minY := 1<<20, 1<<20
+	maxX, maxY := -1, -1
+	for y := int(r.Y); y < int(r.Y+r.H+0.5); y++ {
+		for x := int(r.X); x < int(r.X+r.W+0.5); x++ {
+			rr, gg, b2, _ := img.At(x, y).RGBA()
+			if channelGap(rr, br)+channelGap(gg, bg)+channelGap(b2, bb) < 48 {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	w, h := maxX-minX+1, maxY-minY+1
+	if w < 9 || h < 9 {
+		t.Fatalf("spinner ink %dx%d inside %.1fx%.1f, want about 10pt", w, h, r.W, r.H)
+	}
+}
+
+func channelGap(a, b uint32) int {
+	da, db := int(a>>8), int(b>>8)
+	if da < db {
+		return db - da
+	}
+	return da - db
 }
