@@ -2235,7 +2235,9 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation, slot string) ui.Elem
 	fg := p.TextSecondary
 	switch {
 	case unsupported:
-		b.Opacity(0.45)
+		// Disabled drops the chip from Tab. Disabled paint halves
+		// opacity, so 0.9 keeps the unsupported chip at 0.45.
+		b.Disabled(true).Opacity(0.9)
 	case b.Pressed():
 		b.Background(p.FillPressed)
 		fg = p.TextPrimary
@@ -3237,8 +3239,11 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	}
 	slot := a.hScrollSlot(a.hScrollKey("code", b.Index))
 	edge := scrollEdge(p.CodeBg, a.cardFlat())
-	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).AlignSelf(ui.Stretch).Label("code block").Children(func() {
-		ui.Row(c).Height(28).Padding(0, 4, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
+	// Clip the header to the block's rounded corners. The right padding
+	// keeps the Copy ring, which grows 3pt outside the button, inside
+	// that clip instead of under the corner.
+	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).Clip().AlignSelf(ui.Stretch).Label("code block").Children(func() {
+		ui.Row(c).Height(28).Padding(0, 12, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
 			ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
 			ui.Spacer(c)
 			copy := b.CopyButton(c)

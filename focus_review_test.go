@@ -832,3 +832,212 @@ func TestRegenerateTitleKeepsPlace(t *testing.T) {
 	}
 	requireSidebar(t, a, "Focus")
 }
+
+func TestTabFromDisabledRegenerateGoesToMore(t *testing.T) {
+	a, tt := focusChats(t)
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "Regenerate", 12) {
+		t.Fatal("did not reach Regenerate")
+	}
+	armStream(t, a)
+	tt.Frame()
+	if a.canRegenerate() {
+		t.Fatal("streaming left Regenerate enabled")
+	}
+	tt.Key(0, ui.KeyTab)
+	if tt.Focused("Search") || tt.Focused("Message") {
+		t.Fatal("Tab from disabled Regenerate jumped to the start of the chain")
+	}
+	if !tt.Focused("More") {
+		t.Fatal("Tab from disabled Regenerate did not land on More")
+	}
+	tt.Key(ui.Shift, ui.KeyTab)
+	if tt.Focused("Search") || tt.Focused("Regenerate") {
+		t.Fatal("Shift-Tab from More wrapped to Search or landed on disabled Regenerate")
+	}
+	if !tt.Focused("Stop") {
+		t.Fatal("Shift-Tab did not skip disabled Regenerate and land on Stop")
+	}
+}
+
+func TestTabFromDisabledSettingsSliderGoesForward(t *testing.T) {
+	a, tt := focusChats(t)
+	temp := 1.2
+	a.data.Defaults.Temperature = &temp
+	a.prefReady = false
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "Temperature", 16) {
+		t.Fatal("did not reach the Temperature slider")
+	}
+	a.pref.tempOn = false
+	tt.Frame()
+	tt.Key(0, ui.KeyTab)
+	if tt.Focused("Search settings") || tt.Focused("General") {
+		t.Fatal("Tab from the disabled slider jumped to the start of Settings")
+	}
+	if !tt.Focused("Send temperature") {
+		t.Fatal("Tab from the disabled slider did not land on Send temperature")
+	}
+}
+
+func TestSearchEscapeAfterSettingsKeepsSidebar(t *testing.T) {
+	a, tt := focusChats(t)
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	tt.Key(ui.Cmd, ui.KeyK)
+	if a.settled.kind != focusSearch || !a.searchOriginSet || a.searchOrigin.kind != focusSidebar {
+		t.Fatalf("search origin kind %d set %v settled %d", a.searchOrigin.kind, a.searchOriginSet, a.settled.kind)
+	}
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.settingsOpen {
+		t.Fatal("settings did not open")
+	}
+	a.settingsOpen = false
+	tt.Frame()
+	if !a.searchOriginSet || a.searchOrigin.kind != focusSidebar {
+		t.Fatalf("closing Settings wiped the search origin set=%v kind=%d", a.searchOriginSet, a.searchOrigin.kind)
+	}
+	if !tt.Focused("Search") {
+		if err := tt.Click("Search"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tt.Key(0, ui.KeyEscape)
+	requireSidebar(t, a, "Focus")
+}
+
+func TestUnsupportedReasoningIsNotATabStop(t *testing.T) {
+	_, tt := focusChats(t)
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "Model gpt-4o-mini", 8) {
+		t.Fatal("model chip")
+	}
+	tt.Key(0, ui.KeyTab)
+	if tt.Focused("Reasoning: Default") {
+		t.Fatal("unsupported reasoning chip took Tab")
+	}
+	if !tt.Focused("New Session") {
+		t.Fatal("Tab did not skip the unsupported reasoning chip")
+	}
+	if _, ok := tt.Find("Reasoning: Default"); !ok {
+		t.Fatal("unsupported reasoning chip was removed")
+	}
+}
+
+func TestCodeBlockHeaderCorners(t *testing.T) {
+	a, tt := focusChats(t)
+	a.active().Messages[1].Content = "ans\n\n```\nfmt.Println(1)\n```\n"
+	tt.Frame()
+	block, ok := tt.Find("code block")
+	if !ok || block.W < 40 || block.H < 40 {
+		t.Fatalf("code block %+v", block)
+	}
+	corner := sampleAt(tt, block.X+1, block.Y+1)
+	outside := sampleAt(tt, block.X+1, block.Y-4)
+	header := sampleAt(tt, block.X+radiusCode+12, block.Y+8)
+	right := sampleAt(tt, block.X+block.W-2, block.Y+1)
+	rightOut := sampleAt(tt, block.X+block.W+3, block.Y+1)
+	if rgbaDelta(corner, header) <= rgbaDelta(corner, outside) {
+		t.Fatalf("top-left corner %v matches the header %v more than the outside %v", corner, header, outside)
+	}
+	if rgbaDelta(right, header) <= rgbaDelta(right, rightOut) {
+		t.Fatalf("top-right corner %v matches the header %v more than the outside %v", right, header, rightOut)
+	}
+
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "Copy code", 24) {
+		t.Fatal("code-block Copy is not a tab stop")
+	}
+	btn, ok := tt.FocusedRect("Copy code")
+	if !ok {
+		t.Fatal("Copy code has no focused rect")
+	}
+	ring := sampleAt(tt, btn.X-2, btn.Y+btn.H/2)
+	away := sampleAt(tt, btn.X-12, btn.Y+btn.H/2)
+	if rgbaDelta(ring, away) < 8 {
+		t.Fatalf("Copy ring %v matches the header %v at %+v", ring, away, btn)
+	}
+	if btn.X-2 < block.X || btn.X+btn.W+3 > block.X+block.W {
+		t.Fatalf("Copy ring extends outside the code block: button %+v block %+v", btn, block)
+	}
+}
+
+func TestSettingsMenuCloseStaysInSettings(t *testing.T) {
+	a, _ := focusChats(t)
+	a.settingsSection = "general"
+	tt := ui.NewTester(a.settingsWindowRoot, 780, 560)
+	tt.Frame()
+	if err := tt.Click("Default model menu"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	st := a.popovers["settings-model"]
+	if st == nil || !st.open {
+		t.Fatal("menu did not open")
+	}
+	tt.ClickAt(400, 24)
+	tt.Frame()
+	if a.popupOpen() {
+		t.Fatal("outside click left the settings menu open")
+	}
+	if a.focusComposerID != "" || a.settled.kind == focusComposer || tt.Focused("Message") {
+		t.Fatalf("menu close asked for the composer id=%q kind=%d", a.focusComposerID, a.settled.kind)
+	}
+	if a.settled.kind != focusSettingsNav && !tt.Focused("General") && !tt.Focused("Settings") {
+		t.Fatalf("settings focus kind %d", a.settled.kind)
+	}
+	if a.settled.visible {
+		t.Fatal("mouse-closed settings menu left a focus ring")
+	}
+}
+
+func TestKeyboardMenuOutsideClickCloses(t *testing.T) {
+	a, tt := focusChats(t)
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "More", 16) {
+		t.Fatal("Tab did not reach More")
+	}
+	before := a.data.ActiveID
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	if !moreOpen(tt) {
+		t.Fatal("Down did not open More")
+	}
+	tt.ClickAt(500, 400)
+	if moreOpen(tt) {
+		t.Fatal("first outside click left the keyboard-opened menu open")
+	}
+	if !tt.Focused("More") {
+		t.Fatal("outside click did not restore More")
+	}
+	if a.settled.visible {
+		t.Fatal("outside click left a focus ring")
+	}
+
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	if !moreOpen(tt) {
+		t.Fatal("Down did not reopen More")
+	}
+	other := mustFind(t, tt, "Alpha")
+	tt.ClickAt(other.X+other.W/2, other.Y+other.H/2)
+	if moreOpen(tt) {
+		t.Fatal("first click on a sidebar row left the menu open")
+	}
+	if a.data.ActiveID != before {
+		t.Fatalf("outside click switched to %s", a.data.ActiveID)
+	}
+	if a.settled.visible {
+		t.Fatal("row click left a focus ring")
+	}
+}

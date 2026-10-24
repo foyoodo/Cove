@@ -596,6 +596,7 @@ func TestFocusRingShots(t *testing.T) {
 		}
 		a, tt := focusChats(t)
 		conv := a.active()
+		conv.Config.Model = "o3-mini"
 		conv.Messages[1].Content = "ans\n\n```\nfmt.Println(1)\n```\n"
 		conv.Messages[1].Reasoning = "weighed it"
 		conv.Messages[1].ThinkingMS = 12000
@@ -616,10 +617,10 @@ func TestFocusRingShots(t *testing.T) {
 		enableFullKeyboard(tt)
 		focusDraft(t, tt)
 		tt.Type("hi")
-		if !focusUntil(t, tt, "Model gpt-4o-mini", 6) {
+		if !focusUntil(t, tt, "Model o3-mini", 6) {
 			t.Fatal("model chip is not a tab stop")
 		}
-		crop("model-"+suffix+".png", tt, "Model gpt-4o-mini", 12)
+		crop("model-"+suffix+".png", tt, "Model o3-mini", 12)
 		if !focusUntil(t, tt, "Reasoning: Default", 4) {
 			t.Fatal("reasoning chip is not a tab stop")
 		}
@@ -656,6 +657,12 @@ func TestFocusRingShots(t *testing.T) {
 			t.Fatal("code-block Copy is not a tab stop")
 		}
 		crop("code-copy-"+suffix+".png", tt, "Copy code", 16)
+		if block, ok := tt.Find("code block"); ok {
+			corner := ui.Rect{X: block.X - 10, Y: block.Y - 10, W: 44, H: 44}
+			writeCrop(t, dir, "code-corner-"+suffix+".png", tt, "code block", corner, 0)
+		} else {
+			t.Fatal("code block missing for the corner crop")
+		}
 
 		tt.SetFocused(false)
 		tt.Frame()
@@ -941,10 +948,10 @@ func shotContrastRings(t *testing.T, dir, suffix string, dark bool) {
 	tt.Key(ui.Shift, ui.KeyTab)
 	requireSidebar(t, a, "Focus")
 	writeCrop(t, dir, "contrast-sidebar-"+suffix+".png", tt, "Focus", chatRowRect(t, tt, "Focus"), 12)
-	if !focusUntil(t, tt, "Send", 8) {
-		t.Fatal("contrast Send is not a tab stop")
+	if !focusUntil(t, tt, "Regenerate", 12) {
+		t.Fatal("contrast Regenerate is not a tab stop")
 	}
-	cropLabeled(t, dir, "contrast-button-"+suffix+".png", tt, "Send", 14, 40, 40)
+	cropLabeled(t, dir, "contrast-button-"+suffix+".png", tt, "Regenerate", 14, 48, 48)
 	tt.Key(ui.Shift, ui.KeyTab)
 	for i := 0; i < 6 && !tt.Focused("Search"); i++ {
 		tt.Key(ui.Shift, ui.KeyTab)

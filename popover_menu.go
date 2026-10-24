@@ -384,7 +384,11 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 	var searchEl ui.Element
 	var hotEl ui.Element
 	ui.Overlay(c, func() {
-		back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0)
+		// Keyed so a tooltip overlay appearing or going does not change this
+		// element's id. A keyboard-opened menu shows the anchor's tip; the
+		// first press hides that tip, and an unkeyed backdrop would be a
+		// new element by the time the button comes up, dropping the click.
+		back := ui.Box(c.Key("menu-back-" + spec.Name)).Absolute().Left(0).Top(0).Right(0).Bottom(0)
 		if back.Clicked() {
 			a.dismissPopover(st, c.Now(), false, false)
 		}

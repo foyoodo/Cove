@@ -55,9 +55,10 @@ const (
 )
 
 type tabHit struct {
-	kind tabKind
-	elem uint64
-	name string
+	kind     tabKind
+	elem     uint64
+	name     string
+	disabled bool
 }
 
 const focusRingWidth float32 = 3
@@ -167,8 +168,17 @@ func (a *App) bindLedger(c *ui.Context, settings bool) {
 	}
 	if a.cur == nil {
 		a.windowToken = token
+		// Closing Settings nils the live record after saving this window.
+		// Storing here would write those cleared fields over the saved
+		// one, so a search that started in the sidebar would Esc back to
+		// the composer. Load when this window already has a record.
+		_, seen := a.ledgers[token]
 		a.cur = a.ensureLedger(token)
-		a.storeLedger()
+		if seen {
+			a.loadLedger()
+		} else {
+			a.storeLedger()
+		}
 		a.popupEpoch++
 		return
 	}
@@ -197,6 +207,10 @@ func (a *App) dropSettingsWindow() {
 		return
 	}
 	a.closeOwnedPopovers(token)
+	// Live fields belong to whichever window is bound. Settings is not
+	// current when the main window still is, and clearing them would
+	// throw away that window's focus. The next bind loads the saved
+	// record instead of storing this cleared state over it.
 	if a.windowToken == token {
 		a.clearLiveLedger()
 		a.cur = nil
@@ -346,7 +360,7 @@ func (a *App) finishFocusReturn(c *ui.Context, surf int) {
 		origin, set := a.searchOrigin, a.searchOriginSet
 		a.searchOriginSet = false
 		if set {
-			a.restorePlace(c, origin)
+			a.restorePlace(c, origin, surf)
 		} else {
 			a.focusComposer()
 		}
@@ -355,10 +369,10 @@ func (a *App) finishFocusReturn(c *ui.Context, surf int) {
 		return
 	}
 	a.returnPending = false
-	a.restorePlace(c, a.returnTo)
+	a.restorePlace(c, a.returnTo, surf)
 }
 
-func (a *App) restorePlace(c *ui.Context, p focusPlace) {
+func (a *App) restorePlace(c *ui.Context, p focusPlace, surf int) {
 	show := a.closeKeyboard
 	switch p.kind {
 	case focusSidebar:
@@ -404,15 +418,26 @@ func (a *App) restorePlace(c *ui.Context, p focusPlace) {
 			a.focusComposer()
 		}
 	case focusControl:
-		a.focusComposer()
-	default:
-		if a.buildingSettings || (a.settingsOpen && a.prefs == nil) {
-			if a.focusNavID == "" {
-				a.focusNavID = a.settingsSection
-			}
+		if surf == focusSurfSettings {
+			a.focusSettingsPlace()
 			return
 		}
 		a.focusComposer()
+	default:
+		// buildingSettings is already false by the time a menu's restore
+		// runs, and a real Settings window never sets settingsOpen. The
+		// surface this frame is finishing is the one that decides.
+		if surf == focusSurfSettings {
+			a.focusSettingsPlace()
+			return
+		}
+		a.focusComposer()
+	}
+}
+
+func (a *App) focusSettingsPlace() {
+	if a.focusNavID == "" {
+		a.focusNavID = a.settingsSection
 	}
 }
 
@@ -811,13 +836,15 @@ func (a *App) resetTabTargets() {
 func (a *App) assembleTabs() {
 	var chain []tabHit
 	add := func(el ui.Element, kind tabKind, always bool) {
-		if !el.Valid() || el.IsDisabled() {
+		if !el.Valid() {
 			return
 		}
 		if !always && !a.fullKeyboard {
 			return
 		}
-		chain = append(chain, tabHit{kind: kind, elem: el.ID()})
+		// Disabled stops stay in the chain. Dropping the focused one makes
+		// the next Tab miss it and wrap to Search.
+		chain = append(chain, tabHit{kind: kind, elem: el.ID(), disabled: el.IsDisabled()})
 	}
 	add(a.tabSearch, tabKindSearch, true)
 	add(a.tabList, tabKindList, true)
@@ -844,13 +871,15 @@ func (a *App) assembleTabs() {
 	a.tabChain = chain
 }
 
-func (a *App) focusTab(c *ui.Context, back bool) {
-	chain := a.tabChain
+// nextEnabledTab steps from the focused element to the next enabled stop.
+// A disabled control stays in the chain so it can be found; the step then
+// continues in the same direction. An id that is not in the chain starts
+// at the beginning, or the end when moving backward.
+func nextEnabledTab(chain []tabHit, cur uint64, back bool) (tabHit, bool) {
 	n := len(chain)
 	if n == 0 {
-		return
+		return tabHit{}, false
 	}
-	cur := c.FocusToken().FocusedID()
 	i := -1
 	for j, hit := range chain {
 		if hit.elem == cur {
@@ -858,18 +887,31 @@ func (a *App) focusTab(c *ui.Context, back bool) {
 			break
 		}
 	}
-	next := 0
-	switch {
-	case i < 0 && back:
-		next = n - 1
-	case i < 0:
-		next = 0
-	case back:
-		next = (i - 1 + n) % n
-	default:
-		next = (i + 1) % n
+	if i < 0 && back {
+		i = 0
 	}
-	hit := chain[next]
+	for step := 1; step <= n; step++ {
+		j := i + step
+		if back {
+			j = i - step
+		}
+		j %= n
+		if j < 0 {
+			j += n
+		}
+		if !chain[j].disabled {
+			return chain[j], true
+		}
+	}
+	return tabHit{}, false
+}
+
+func (a *App) focusTab(c *ui.Context, back bool) {
+	chain := a.tabChain
+	hit, ok := nextEnabledTab(chain, c.FocusToken().FocusedID(), back)
+	if !ok {
+		return
+	}
 	switch hit.kind {
 	case tabKindSearch:
 		a.focusSearch = true
@@ -892,13 +934,13 @@ func (a *App) resetSettingsTabs() {
 }
 
 func (a *App) noteSettingsStop(el ui.Element, always bool) {
-	if !a.buildingSettings || !el.Valid() || el.IsDisabled() {
+	if !a.buildingSettings || !el.Valid() {
 		return
 	}
 	if !always && !a.fullKeyboard {
 		return
 	}
-	a.settingsTabBuf = append(a.settingsTabBuf, tabHit{kind: tabKindElem, elem: el.ID()})
+	a.settingsTabBuf = append(a.settingsTabBuf, tabHit{kind: tabKindElem, elem: el.ID(), disabled: el.IsDisabled()})
 }
 
 func (a *App) noteSettingsList(el ui.Element) {
@@ -913,31 +955,10 @@ func (a *App) finishSettingsTabs() {
 }
 
 func (a *App) focusSettingsTab(c *ui.Context, back bool) {
-	chain := a.settingsChain
-	n := len(chain)
-	if n == 0 {
+	hit, ok := nextEnabledTab(a.settingsChain, c.FocusToken().FocusedID(), back)
+	if !ok {
 		return
 	}
-	cur := c.FocusToken().FocusedID()
-	i := -1
-	for j, hit := range chain {
-		if hit.elem == cur {
-			i = j
-			break
-		}
-	}
-	next := 0
-	switch {
-	case i < 0 && back:
-		next = n - 1
-	case i < 0:
-		next = 0
-	case back:
-		next = (i - 1 + n) % n
-	default:
-		next = (i + 1) % n
-	}
-	hit := chain[next]
 	if hit.kind == tabKindList {
 		a.focusNavID = a.settingsSection
 		a.wantSettingsRing = true

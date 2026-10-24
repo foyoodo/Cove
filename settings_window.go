@@ -334,10 +334,11 @@ func (a *App) navButton(c *ui.Context, label string, glyph *ui.SVG, enabled bool
 	})
 	if enabled {
 		a.quietControl(b, radiusRow)
-		a.noteSettingsStop(b, false)
 	} else {
 		b.FocusRing(false)
 	}
+	// A disabled Back stays in the chain so Tab can step off it.
+	a.noteSettingsStop(b, false)
 	return b
 }
 
