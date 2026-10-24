@@ -44,13 +44,19 @@ func (a *App) openFind() {
 		return
 	}
 	if a.edit.convID != "" {
-		a.cancelEdit()
+		a.dropEdit()
 	}
 	a.focusComposerID = ""
 	a.finder.wantFocus = true
 	if a.finder.open {
 		return
 	}
+	a.findRestoreMessage = strings.TrimSpace(a.histSel.Text) != "" && a.settled.kind == focusMessage
+	a.findSelElem = 0
+	if a.findRestoreMessage {
+		a.findSelElem = a.settled.elem
+	}
+	a.pushFocusReturn()
 	a.finder.open = true
 	a.finder.cur = -1
 	a.finder.sel = 0
@@ -79,7 +85,19 @@ func (a *App) closeFind() {
 	a.finder.flashPending = false
 	a.finder.markFresh = false
 	a.finder.wantFocus = false
-	a.focusComposer()
+	if a.findRestoreMessage {
+		elem := a.findSelElem
+		a.findRestoreMessage = false
+		a.findSelElem = 0
+		if a.returnDepth > 0 {
+			a.returnDepth--
+		}
+		a.returnTo = focusPlace{kind: focusMessage, elem: elem, id: a.data.ActiveID}
+		a.returnPending = a.returnDepth == 0
+		a.returnSurf = focusSurfMain
+		return
+	}
+	a.popFocusReturn()
 }
 
 func (a *App) syncFindQuery(now time.Time) {
@@ -354,9 +372,16 @@ func (a *App) findBar(c *ui.Context, conv *Conversation) {
 			}
 		})
 		if input.Valid() && input.Focused() {
-			field.Border(1, p.AccentDefault).Shadow(0, 0, 0, 3, p.AccentRing)
+			field.Border(1, p.AccentDefault)
 		}
+		field.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+			if input.Valid() && input.Focused() {
+				a.strokeOuter(painter, r, radiusRow, field.ID())
+			}
+		})
 		a.finder.focused = input.Valid() && input.Focused()
+		a.tabFind = input
+		a.takeTab(c, input)
 		if input.Valid() && input.Submitted() && !a.finder.enterHandled {
 			if c.Modifiers()&ui.Shift != 0 {
 				a.finder.enterHandled = true
@@ -713,6 +738,7 @@ func (a *App) paintCode(c *ui.Context, d *parser.Document, i int, blk *parser.Bl
 			ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
 			ui.Spacer(c)
 			btn := ui.ButtonBase(c).Padding(2, 6).Radius(5).Gap(4).Label("Copy").Cursor(ui.CursorPointer)
+			a.quietControl(btn, radiusRow)
 			btn.Children(func() {
 				ui.Icon(c, iconCopy).Size(12, 12).TextColor(p.TextSecondary)
 				ui.Text(c, "Copy").FontSize(11).TextColor(p.TextSecondary)

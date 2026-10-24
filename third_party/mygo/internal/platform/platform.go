@@ -879,6 +879,10 @@ type Preferences struct {
 	// HighContrast asks for more contrast: macOS's Increase Contrast,
 	// Windows's contrast themes, the desktop portal's higher contrast.
 	HighContrast bool
+	// FullKeyboardAccess is macOS's Full Keyboard Access (⌃F7): Tab
+	// visits every control, not only text fields and lists. Other
+	// desktops leave it false.
+	FullKeyboardAccess bool
 	// TextScale is how many times larger than usual text should be, as
 	// Windows's and GNOME's text size settings say; 0 or 1 for usual.
 	TextScale float64

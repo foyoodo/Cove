@@ -80,6 +80,7 @@ func (a *App) providerRow(c *ui.Context, conn *Connection, kind, status string, 
 			ui.Box(c).Height(1).FillWidth().Margin(0, 0, 0, 12).Background(p.SeparatorDefault)
 		}
 		row := ui.ButtonBase(c).FillWidth().MinHeight(36).Padding(4, 10, 4, 12).Gap(8).AlignItems(ui.Center).Label(name).Cursor(ui.CursorPointer)
+		a.keyboardInset(row, radiusRow)
 		if row.Pressed() {
 			row.Background(p.FillPressed)
 		} else if row.Hovered() {
@@ -344,7 +345,8 @@ func (a *App) modelToggleRow(c *ui.Context, m ProviderModel, first bool) {
 			if btn.Clicked() {
 				a.setModelEnabled(id, !on, c.Now())
 			}
-			sw := ui.Switch(c, &on).Label("Show "+id).Size(32, 18).Shrink(0)
+			sw := ui.Switch(c, &on).Label("Show "+id).Size(32, 18).Shrink(0).KeepFocus().FocusRing(false)
+			a.keyboardRingOnly(sw, radiusPill)
 			if sw.Changed() {
 				a.setModelEnabled(id, on, c.Now())
 			}

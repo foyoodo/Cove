@@ -1302,6 +1302,17 @@ func quoteCloseBoxes(t *testing.T, tt *ui.Tester, q Quote) (card, btn ui.Rect) {
 func focusRemoveQuote(t *testing.T, tt *ui.Tester) {
 	t.Helper()
 	tt.SetFocused(true)
+	// Full Keyboard Access is off by default. The remove button is a
+	// control, so Tab reaches it only once that setting is on. It sits
+	// just before the composer, so Shift-Tab from the field lands on it.
+	tt.SetPreferences(ui.Preferences{FullKeyboardAccess: true})
+	for i := 0; i < 40; i++ {
+		if tt.Focused("Remove quote") {
+			tt.Frame()
+			return
+		}
+		tt.Key(ui.Shift, ui.KeyTab)
+	}
 	for i := 0; i < 40; i++ {
 		if tt.Focused("Remove quote") {
 			tt.Frame()

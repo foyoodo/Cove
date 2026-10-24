@@ -682,6 +682,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 	if !rt.claimed(k) && rt.scrollKey(mods, key) {
 		return false
 	}
+	if rt.handoffSelection(mods, key) {
+		return false
+	}
 	rt.keys = append(rt.keys, k)
 	rt.requestFrame()
 	return false
@@ -690,6 +693,38 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 // typePause is how long after a letter typed to choose a row the next
 // one starts anew.
 const typePause = time.Second
+
+// handoffSelection gives an unmodified printable key, typed while a
+// non-editable selection has the keyboard, to the app. The app moves the
+// keyboard onto a text field and updateTextInput runs before this returns,
+// so the host can send the original key through the input method. The
+// character is not inserted here. Space, Return, and chords are left alone
+// so Copy and the selection keys still work (they were taken above).
+func (rt *engine) handoffSelection(mods Modifiers, key Key) bool {
+	if rt.selectionHandoff == nil || !handoffKey(mods, key) {
+		return false
+	}
+	s := rt.states[rt.focused]
+	if s == nil || s.flags&flagSelectable == 0 || s.flags&flagEditable != 0 {
+		return false
+	}
+	if !rt.selectionHandoff() {
+		return false
+	}
+	rt.updateTextInput()
+	rt.focusVisible = true
+	rt.requestFrame()
+	return true
+}
+
+// handoffKey reports a printable key with no modifier but Shift.
+// Space, Return, Tab, Escape, and unknown keys stay with the selection.
+func handoffKey(mods Modifiers, key Key) bool {
+	if mods&^Shift != 0 || key == KeySpace || key == KeyEnter || key == KeyTab || key == KeyEscape || key == KeyUnknown {
+		return false
+	}
+	return typesText(keyEvent{mods: mods, key: key})
+}
 
 // typedRune returns the letter, digit or space a key types without
 // modifiers but Shift, in lowercase, for choosing a row by its text.

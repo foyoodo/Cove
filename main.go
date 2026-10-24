@@ -206,6 +206,7 @@ func (a *App) menu() *mygo.Menu {
 					Click: act(func() {
 						if a.CanInsertBreak() {
 							a.InsertSessionBreak()
+							a.focusComposer()
 						}
 					}),
 				}
@@ -216,7 +217,7 @@ func (a *App) menu() *mygo.Menu {
 			{Label: "Regenerate", Accelerator: "CmdOrCtrl+R", Click: act(a.regenerate)},
 			{Label: "Stop", Accelerator: "CmdOrCtrl+.", Click: act(a.stop)},
 			mygo.Separator(),
-			{Label: "Last Request", Click: act(func() { a.requestOpen = true })},
+			{Label: "Last Request", Click: act(func() { a.openRequest() })},
 		}},
 		{Role: mygo.RoleWindowMenu},
 	})

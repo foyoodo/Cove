@@ -119,6 +119,8 @@ type popoverState struct {
 	typeAt         time.Time
 	focusComposer  bool
 	focusMoved     bool
+	// pushed records that opening this menu took a focus snapshot.
+	pushed         bool
 	activate       bool
 	closing        bool
 	animAt         time.Time
@@ -192,28 +194,39 @@ func (a *App) bindPopover(c *ui.Context, key string, anchor ui.Element, spec pop
 		st.pendingKey = false
 		for k, other := range a.popovers {
 			if k != key && other.open {
+				a.releasePopover(other)
 				other.open = false
 				other.closing = false
 			}
 		}
+		a.pushFocusReturn()
 		st.reset(c, keyboard)
+		st.pushed = true
+		// A pointer click does not leave a ring, and KeepFocus leaves the
+		// keyboard in the field underneath. The open menu still has to
+		// take letters and arrows. A keyboard open already focused the
+		// anchor with its ring, and a search field focuses itself next.
+		if !keyboard && !spec.Search {
+			anchor.Focus()
+			a.showFocusRing(c, false)
+		}
 	}
 	if st.open {
 		a.paintPopover(c, anchor, st, spec)
 	}
-	if st.focusMoved {
-		st.focusMoved = false
-		if st.focusComposer {
-			st.focusComposer = false
-			a.focusComposer()
-		} else if anchor.Valid() {
-			anchor.Focus()
-		}
-	}
 	st.wasOpen = st.open
 }
 
+func (a *App) releasePopover(st *popoverState) {
+	if st == nil || !st.pushed {
+		return
+	}
+	st.pushed = false
+	a.popFocusReturn()
+}
+
 func (a *App) dismissPopover(st *popoverState, now time.Time, composer bool) {
+	a.releasePopover(st)
 	st.focusComposer = composer
 	if !st.focusMoved {
 		st.focusMoved = true
@@ -230,6 +243,13 @@ func (a *App) dismissPopover(st *popoverState, now time.Time, composer bool) {
 }
 
 func (a *App) commitPopover(st *popoverState, spec popSpec, id string) {
+	a.releasePopover(st)
+	// Choosing a composer chip's item returns to the composer. Settings
+	// and Add open another surface, which keeps the pre-menu place.
+	if spec.ComposerFocus && id != modelMenuSettings && id != modelMenuAdd {
+		a.abandonFocusReturn()
+		a.focusComposer()
+	}
 	st.focusComposer = spec.ComposerFocus
 	st.focusMoved = true
 	st.open = false

@@ -95,9 +95,15 @@ func (a *App) settingsWindowRoot(c *ui.Context) {
 	c.Root().Background(look.WindowBaseBottom).Draw(func(p *ui.Painter, r ui.Rect) {
 		a.paintSettingsBackdrop(p, r)
 	})
+	a.buildingSettings = true
+	a.paintCtx = c
+	a.beginRings()
 	a.settingsBody(c)
 	a.confirmDialog(c)
+	a.buildingSettings = false
 	a.veilScrollbar(c)
+	a.finishFocusReturn(c, focusSurfSettings)
+	a.noteSettledFocus(c)
 	if a.prefs != nil {
 		a.prefs.SetTitle(a.settingsHeading())
 	}
@@ -111,20 +117,35 @@ func (a *App) settingsBody(c *ui.Context) {
 			ui.Row(c).Height(titleBarHeight).FillWidth()
 			ui.Column(c).Padding(0, 10, 8, 10).Gap(8).Grow(1).Children(func() {
 				a.settingsSearch(c)
-				for _, s := range settingsSections {
-					if !a.settingsSectionVisible(s) {
-						continue
+				rows := a.visibleSettingsNav()
+				a.syncSettingsNav(rows)
+				a.settingsNav.Selected = &a.settingsNavIndex
+				a.settingsNav.Label = func(i int) string {
+					if i < 0 || i >= len(rows) {
+						return ""
 					}
-					sec := s
-					row := ui.ButtonBase(c).Height(rowHeight).FillWidth().Gap(8).Padding(0, 8).Radius(radiusRow).AlignItems(ui.Center).Label(sec.label).Cursor(ui.CursorPointer)
+					return rows[i].label
+				}
+				nav := ui.List(c, &a.settingsNav, len(rows), func(i int) {
+					if i < 0 || i >= len(rows) {
+						return
+					}
+					sec := rows[i]
+					selected := sec.id == a.settingsSection
+					row := ui.Row(c).Height(rowHeight).FillWidth().Gap(8).Padding(0, 8).Radius(radiusRow).AlignItems(ui.Center).Label(sec.label).Cursor(ui.CursorPointer)
 					fg := p.TextSecondary
-					if a.settingsSection == sec.id {
+					if selected {
 						row.Background(p.SelectionRow)
 						fg = p.TextPrimary
 					} else if row.Hovered() {
 						row.Background(p.FillHover)
 					}
 					a.fadeColors(row)
+					row.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+						if selected && a.settingsNavKey {
+							a.strokeInset(painter, r, radiusRow, row.ID())
+						}
+					})
 					row.Children(func() {
 						ui.Icon(c, sec.icon).Size(16, 16).TextColor(fg)
 						ui.Text(c, sec.label).FontSize(13).TextColor(fg).SingleLine().Grow(1).MinWidth(0)
@@ -133,7 +154,19 @@ func (a *App) settingsBody(c *ui.Context) {
 						a.leaveProviderPage(c.Now())
 						a.settingsSection = sec.id
 					}
+				}).Grow(1).FillWidth().Gap(1).FocusRing(false).Label("Settings")
+				if nav.Changed() && a.settingsNavIndex >= 0 && a.settingsNavIndex < len(rows) {
+					a.leaveProviderPage(c.Now())
+					a.settingsSection = rows[a.settingsNavIndex].id
 				}
+				if a.focusNavID != "" {
+					if a.settingsNav.Focus(c) {
+						a.showFocusRing(c, a.wantSettingsRing)
+					}
+					a.focusNavID = ""
+					a.wantSettingsRing = false
+				}
+				a.settingsNavKey = nav.FocusVisible()
 			})
 		})
 		// The 52pt title bar sits on the window gradient. The card is the
@@ -210,6 +243,14 @@ func (a *App) settingsSearch(c *ui.Context) {
 		in := ui.TextInputBase(c, &a.settingsQuery).Placeholder("Search").Label("Search settings").Grow(1).MinWidth(0).FontSize(13)
 		in.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
 		paintPlaceholder(c, in, p.TextSecondary)
+		if in.Focused() {
+			row.Border(1, p.AccentDefault)
+		}
+		row.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+			if in.Focused() {
+				a.strokeOuter(painter, r, radiusRow, row.ID())
+			}
+		})
 	})
 }
 
@@ -312,14 +353,16 @@ func (a *App) settingsGeneral(c *ui.Context) {
 			*el = a.sendWithControl(c)
 		})
 		a.settingsLine(c, "Show reasoning while generating", "Collapse it when the reply starts", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.ShowReasoning).Label("Show reasoning while generating")
+			sw := ui.Switch(c, &a.data.ShowReasoning).Label("Show reasoning while generating").KeepFocus().FocusRing(false)
+			a.keyboardRingOnly(sw, radiusPill)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
 			}
 		})
 		a.settingsRow(c, "Restore last chat on launch", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.RestoreLast).Label("Restore last chat on launch")
+			sw := ui.Switch(c, &a.data.RestoreLast).Label("Restore last chat on launch").KeepFocus().FocusRing(false)
+			a.keyboardRingOnly(sw, radiusPill)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
@@ -506,7 +549,7 @@ func (a *App) settingsAbout(c *ui.Context) {
 				ui.Icon(c, iconChevronRight).Size(11, 11).TextColor(p.TextLink)
 			})
 			if b.Clicked() {
-				a.acksOpen = true
+				a.openAcks()
 			}
 		})
 	})
@@ -664,7 +707,8 @@ func (a *App) settingsAdvanced(c *ui.Context) {
 			*el = in
 		})
 		a.settingsRow(c, "Keep last request", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.KeepLastRequest).Label("Keep last request")
+			sw := ui.Switch(c, &a.data.KeepLastRequest).Label("Keep last request").KeepFocus().FocusRing(false)
+			a.keyboardRingOnly(sw, radiusPill)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
@@ -998,7 +1042,8 @@ func (a *App) prefTemperature(c *ui.Context) ui.Element {
 	const inset = float32(8)
 	s := ui.SliderBase(c, &a.pref.temp, 0, 2).Step(0.1).Width(148).Height(16).PaddingX(inset).FocusRing(false).Label("Temperature")
 	ui.Textf(c, "%.1f", a.pref.temp).Font("ui-monospace").FontSize(12)
-	sw := ui.Switch(c, &a.pref.tempOn).Label("Send temperature").Size(32, 18)
+	sw := ui.Switch(c, &a.pref.tempOn).Label("Send temperature").Size(32, 18).KeepFocus().FocusRing(false)
+	a.keyboardRingOnly(sw, radiusPill)
 	if sw.Changed() {
 		a.commitPref(c.Now())
 	}

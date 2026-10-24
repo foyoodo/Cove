@@ -506,9 +506,19 @@ func TestPopoverOpenHighlight(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEscape)
 
+	// A pointer-opened menu returns the keyboard to the composer. The
+	// anchor does not keep it, and it does not show a ring.
+	if tt.Focused("More") || !tt.Focused("Message") {
+		t.Fatal("mouse Esc did not return focus to the composer")
+	}
 	// Keyboard open (anchor focused, then Down or Space) highlights the first row.
+	tt.SetPreferences(ui.Preferences{FullKeyboardAccess: true, TextScale: 1})
+	tt.Frame()
+	for i := 0; i < 16 && !tt.Focused("More"); i++ {
+		tt.Key(0, ui.KeyTab)
+	}
 	if !tt.Focused("More") {
-		t.Fatal("Esc did not return focus to More")
+		t.Fatal("Tab did not reach More")
 	}
 	tt.Key(0, ui.KeyDown)
 	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {

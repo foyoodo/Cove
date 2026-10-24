@@ -24,69 +24,42 @@ func (a *App) dismissConfirm() {
 // on dismiss unless the user had already moved it to another field.
 func (a *App) beginConfirm(kind string) {
 	if a.confirmKind == "" {
-		a.restoreComposer = false
-		a.restoreSearch = false
-		// Settings keeps its own field. keyboardOwner was recorded last
-		// frame, because this shortcut runs before the fields are built
-		// and the previous frame's element handles are already invalid.
-		if !a.settingsOpen {
-			switch a.keyboardOwner {
-			case focusOwnerSearch:
-				a.restoreSearch = true
-			case focusOwnerFind:
-				a.finder.wantFocus = true
-			default:
-				a.restoreComposer = true
-			}
-		}
+		a.pushFocusReturn()
 	}
 	a.confirmKind = kind
 }
 
 func (a *App) endConfirm() {
-	restoreComposer := a.restoreComposer
-	restoreSearch := a.restoreSearch
-	a.restoreComposer = false
-	a.restoreSearch = false
 	a.confirmKind = ""
-	if restoreSearch {
-		a.focusSearch = true
-		if a.searchInput.Valid() {
-			a.searchInput.Focus()
-		}
-		return
-	}
-	if restoreComposer {
-		a.focusComposer()
-	}
+	a.popFocusReturn()
 }
 
 func (a *App) acceptConfirm() {
 	kind := a.confirmKind
 	id := a.deleteID
-	restoreComposer := a.restoreComposer
-	restoreSearch := a.restoreSearch
-	a.restoreComposer = false
-	a.restoreSearch = false
+	fromSide := kind == confirmDelete && a.returnTo.kind == focusSidebar
+	ring := a.returnTo.visible
 	a.confirmKind = ""
 	switch kind {
 	case confirmDelete:
 		a.deleteConversation(id)
+		if fromSide && a.data.ActiveID != "" {
+			// The row that opened the dialog is gone. Stay on the adjacent
+			// sidebar row instead of restoring that element.
+			a.stayOnSidebar(ring)
+			return
+		}
+		// Other deletes land in the new chat's composer. A menu that
+		// opened the dialog does not take the keyboard back.
+		a.abandonFocusReturn()
+		a.focusComposer()
+		return
 	case confirmReset:
 		a.resetAllSettings()
 	case confirmDeleteProvider:
 		a.deleteCustomProvider(id, time.Now())
 	}
-	if restoreSearch {
-		a.focusSearch = true
-		if a.searchInput.Valid() {
-			a.searchInput.Focus()
-		}
-		return
-	}
-	if restoreComposer {
-		a.focusComposer()
-	}
+	a.popFocusReturn()
 }
 
 func (a *App) confirmCopy() (title, body, action string) {
@@ -184,5 +157,10 @@ func (a *App) dialogButton(c *ui.Context, label string, danger bool, surface the
 	b.Children(func() {
 		controlText(c, label, 13, 0, weight, fg)
 	})
+	if label == "Cancel" && a.confirmKind != "" {
+		a.alwaysRing(b, radiusRow)
+	} else {
+		a.keyboardRingOnly(b, radiusRow)
+	}
 	return b
 }

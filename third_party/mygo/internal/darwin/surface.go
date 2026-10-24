@@ -861,7 +861,8 @@ func registerSurfaceClass() {
 				return
 			}
 			mods := eventMods(ev)
-			text := s.input.Active && mods&(platform.ModSuper|platform.ModCtrl) == 0
+			wasActive := s.input.Active
+			text := wasActive && mods&(platform.ModSuper|platform.ModCtrl) == 0
 			ime := text && !s.input.NoInputMethod
 			// A key typed while the input method composes is the input
 			// method's alone, as Enter choosing a candidate or Escape
@@ -870,13 +871,17 @@ func registerSurfaceClass() {
 			if !ime || !s.hasMarkedText() {
 				s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Mods: mods, Repeat: sendBool(ev, "isARepeat")})
 			}
+			// A selection can hand the key to a text field during
+			// KeyPressed. The field was not active when the key arrived,
+			// so interpret the original event now, once, on that field.
+			became := !wasActive && s.input.Active && mods&(platform.ModSuper|platform.ModCtrl) == 0
 			// Input methods see the key while a text input has the focus;
 			// they answer with insertText: or setMarkedText:.
-			if ime {
+			if ime || (became && !s.input.NoInputMethod) {
 				s.keyDown = true
 				send(self, "interpretKeyEvents:", uintptr(nsArray(ev)))
 				s.keyDown = false
-			} else if text {
+			} else if text || became {
 				// Input methods off: the key types the characters of the
 				// layout, as winit's keys do without them.
 				if t := typedChars(stringOf(send(ev, "characters"))); t != "" {

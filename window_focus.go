@@ -110,6 +110,10 @@ func (a *App) noteComposerCaret() {
 	anchor, caret := a.composerField.TextAnchorCaret()
 	a.composerAnchor, a.composerCaretPos = anchor, caret
 	a.composerCaretSet = true
+	if conv := a.active(); conv != nil {
+		conv.draftAnchor, conv.draftCaret, conv.draftCaretSet = anchor, caret, true
+		conv.draftCaretDraft = conv.Draft
+	}
 }
 
 func composerEnd(draft string) (int, int) {

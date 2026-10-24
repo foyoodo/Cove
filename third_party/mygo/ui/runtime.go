@@ -302,7 +302,14 @@ type engine struct {
 	// (Context.Announce).
 	announcements []string
 	// stats measures frames for MYGO_FRAME_STATS, nil when it is unset.
+	// Its offset is part of the headless frame probe (engineStatsOffset).
+	// Fields above it stay put so that probe still lands on this pointer.
 	stats *frameStats
+	// selectionHandoff, when set, runs for an unmodified printable key
+	// while a non-editable selection has the keyboard. The app moves the
+	// keyboard to a text field; the host then delivers the same key
+	// through the input method. The key is not inserted here.
+	selectionHandoff func() bool
 	// dropOver is the element files are dragged over; access is true once
 	// assistive technology asked for the content.
 	dropOver   uint64
@@ -342,6 +349,49 @@ type engine struct {
 		id, prev uint64
 		base     int
 	}
+}
+
+func (rt *engine) focusedID() uint64 { return rt.focused }
+
+func (rt *engine) focusShows() bool { return rt.focusVisible }
+
+// focusLive moves the keyboard to id when that element was built this
+// frame. visible keeps the keyboard focus ring, which a pointer move
+// would have cleared.
+func (rt *engine) focusLive(id uint64, visible bool) bool {
+	s := rt.states[id]
+	if id == 0 || s == nil || s.seen != rt.frame {
+		return false
+	}
+	if rt.focused != id {
+		rt.focused = id
+		rt.blinkStart = rt.now()
+	}
+	rt.focusVisible = visible
+	return true
+}
+
+func (rt *engine) setFocusShows(on bool) { rt.focusVisible = on }
+
+// focusID moves the keyboard to id even when that element has not been
+// built this frame yet. A rebuild that keeps the id keeps the keyboard.
+func (rt *engine) focusID(id uint64, visible bool) {
+	if id == 0 {
+		return
+	}
+	if rt.focused != id {
+		rt.focused = id
+		rt.blinkStart = rt.now()
+	}
+	rt.focusVisible = visible
+}
+
+func (rt *engine) setSelectionHandoff(fn func() bool) { rt.selectionHandoff = fn }
+
+// focusedSelectable reports a non-editable selection holding the keyboard.
+func (rt *engine) focusedSelectable() bool {
+	s := rt.states[rt.focused]
+	return s != nil && s.flags&flagSelectable != 0 && s.flags&flagEditable == 0
 }
 
 // scrollDrag is the scroll bar thumb being dragged: where the pointer
