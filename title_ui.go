@@ -139,6 +139,9 @@ func (a *App) sideAccessLabel(i int, now time.Time) string {
 	if a.titleDimmed(conv.ID, false) {
 		return title + ", " + titleGenerating
 	}
+	if show, _ := a.titleFailAge(now, conv.ID); show {
+		return title + ", " + titleFailText
+	}
 	when := conv.UpdatedAt
 	if when.IsZero() {
 		when = conv.CreatedAt
@@ -230,43 +233,4 @@ func (a *App) titleWarn(c *ui.Context) ui.Element {
 	p := a.look
 	icon := ui.Icon(c, iconAlert).Size(12, 12).TextColor(p.StatusWarning).Label(titleFailText).Shrink(0)
 	return a.tip(c, icon, titleFailText)
-}
-
-// paintPreviewMenu draws the sidebar context menu for a headless shot.
-// The real menu is the system menu and is not in the framebuffer.
-func (a *App) paintPreviewMenu(c *ui.Context) {
-	m := a.previewMenu
-	if m == nil || len(m.Items) == 0 {
-		return
-	}
-	p := a.look
-	bg := ui.Color{R: 255, G: 255, B: 255, A: 250}
-	if p.Dark {
-		bg = ui.Color{R: 44, G: 44, B: 48, A: 250}
-	}
-	w := float32(188)
-	panel := ui.Column(c).Absolute().Left(m.X).Top(m.Y).Width(w).Radius(8).Background(bg).Padding(4, 0).Label("context menu")
-	panel.Border(0.5, p.LayerOverlayBorder)
-	panel.Shadow(0, 10, 28, 0, p.ShadowMd)
-	panel.Children(func() {
-		for _, it := range m.Items {
-			if it.Sep {
-				ui.Box(c).Height(1).FillWidth().Margin(4, 10).Background(p.SeparatorDefault)
-				continue
-			}
-			row := ui.Row(c).Height(22).FillWidth().Padding(0, 12).AlignItems(ui.Center).Radius(5)
-			fg := p.TextPrimary
-			if it.Disabled {
-				fg = p.TextTertiary
-			}
-			if it.Hot && !it.Disabled {
-				row.Background(ui.Color{R: 0, G: 122, B: 255, A: 255})
-				fg = ui.Color{R: 255, G: 255, B: 255, A: 255}
-			}
-			label := it.Label
-			row.Children(func() {
-				ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine()
-			})
-		}
-	})
 }

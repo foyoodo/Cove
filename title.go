@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/egoist/mygo/ui"
 	"golang.org/x/text/width"
 )
 
@@ -33,7 +35,6 @@ const (
 	titleWidthMax     = 30
 	titleReplyRunes   = 1000
 	titleManualRounds = 3
-	titleTokensNormal = 32
 	titleTokensReason = 256
 	titleTimeout      = 15 * time.Second
 )
@@ -45,11 +46,13 @@ const titleSystemPrompt = "Write a short title for this conversation. Use the sa
 // Tests replace it so a title never hits the network.
 var titleComplete = completeChat
 
-// silenceAutoTitles is set by TestMain. Ordinary tests post a chat
-// completion and then read that request; a title request on the same
-// server would replace it. Production leaves this false, so a new
-// install still generates titles. Title tests turn AutoTitles back on.
-var silenceAutoTitles bool
+// openAppHook and framePaintHook are nil in the app. Tests set them so
+// a finished reply does not also post a title, and so a headless shot
+// can draw a menu the framebuffer does not paint.
+var (
+	openAppHook    func(*App)
+	framePaintHook func(*App, *ui.Context)
+)
 
 // titleJob is one in-flight title request. gen drops a callback that
 // arrives after the job was cancelled.
@@ -70,36 +73,48 @@ type titleFade struct {
 	bar   bool
 }
 
-// previewMenu is a test-only drawing of the sidebar's native menu.
-// The headless renderer records that menu but does not paint it.
-type previewMenu struct {
-	X, Y  float32
-	Items []previewItem
-}
-
-type previewItem struct {
-	Label    string
-	Disabled bool
-	Hot      bool
-	Sep      bool
-}
-
-func (a *App) maybeAutoTitle(convID string) {
-	if !a.data.AutoTitles {
+// protectLegacyTitle marks a chat saved before titleSource existed.
+// Those files have a name the user already accepted. An empty source
+// plus any message means the one automatic attempt is already done, so
+// a later regenerate of that reply cannot overwrite the name.
+func protectLegacyTitle(conv *Conversation) {
+	if conv == nil || conv.TitleSource != "" || conv.TitleGenerated {
 		return
+	}
+	if len(conv.Messages) == 0 && conv.MessageCount == 0 {
+		return
+	}
+	conv.TitleGenerated = true
+}
+
+// markAutoTitle records the one automatic attempt. The caller saves that
+// flag with the reply, then starts the request. Only a temporary title
+// is eligible: a manual name, and a legacy chat with no source, stay.
+func (a *App) markAutoTitle(convID string) bool {
+	if !a.data.AutoTitles {
+		return false
 	}
 	conv := a.conversation(convID)
-	if conv == nil || conv.TitleGenerated || conv.TitleSource == titleSourceManual {
-		return
+	if conv == nil || conv.TitleGenerated || conv.TitleSource != titleSourceTemp {
+		return false
 	}
 	if !isFirstReply(conv) {
+		return false
+	}
+	conv.TitleGenerated = true
+	return true
+}
+
+// maybeAutoTitle is the direct path tests use. A live reply goes through
+// markAutoTitle and the save it already performs.
+func (a *App) maybeAutoTitle(convID string) {
+	if !a.markAutoTitle(convID) {
 		return
 	}
-	// Record the attempt before the request leaves. A quit while it is
-	// in flight does not try again on the next launch.
-	conv.TitleGenerated = true
 	a.saveSync()
-	a.startTitle(conv, false, false)
+	if conv := a.conversation(convID); conv != nil {
+		a.startTitle(conv, false, false)
+	}
 }
 
 // regenerateTitle asks for a new title for id. dimBar is set for the
@@ -121,8 +136,21 @@ func (a *App) canRegenerateTitle(conv *Conversation) bool {
 	if !hasUserMessage(conv) {
 		return false
 	}
-	_, model := a.composerModelParts(conv.Config)
-	return model != "No model"
+	return a.chatHasModel(conv.Config)
+}
+
+// chatHasModel is the same condition as the composer chip reading
+// "No model": the connection is gone, there is no provider, or the chat
+// has no model id. It does not compare that display string.
+func (a *App) chatHasModel(cfg Config) bool {
+	if id := strings.TrimSpace(cfg.ConnectionID); id != "" && a.connByID(id) == nil {
+		return false
+	}
+	if len(a.data.Connections) == 0 {
+		return false
+	}
+	model := strings.TrimSpace(cfg.Model)
+	return model != "" && shortModel(model) != "Model"
 }
 
 func (a *App) titleBusy(id string) bool {
@@ -149,11 +177,12 @@ func (a *App) startTitle(conv *Conversation, manual, dimBar bool) {
 	if a.titleBusy(id) {
 		return
 	}
-	cfg, ok := a.titleConfig(conv, true)
+	cfg, usingChat, ok := a.titleConfig(conv, false)
 	turns := titleTurns(conv, manual)
 	body, err := []byte(nil), error(nil)
+	omitReasoning := usingChat && normalizeEffort(conv.Config.Reasoning) == ""
 	if ok {
-		body, err = titleRequestBody(cfg, turns)
+		body, err = titleRequestBody(cfg, turns, omitReasoning)
 		ok = err == nil && len(turns) > 0
 	}
 	if !ok {
@@ -163,6 +192,7 @@ func (a *App) startTitle(conv *Conversation, manual, dimBar bool) {
 		}
 		return
 	}
+	needKey := titleNeedsKey(cfg)
 	if a.titleGens == nil {
 		a.titleGens = map[string]int{}
 	}
@@ -173,13 +203,47 @@ func (a *App) startTitle(conv *Conversation, manual, dimBar bool) {
 		a.titleJobs = map[string]*titleJob{}
 	}
 	a.titleJobs[id] = &titleJob{gen: gen, manual: manual, bar: dimBar, cancel: cancel}
-	a.launch(func() {
-		text, err := titleComplete(ctx, cfg, body)
+	// The credential read and the HTTP call stay off the UI thread when a
+	// window is open. Tests stay synchronous unless they opt into titleAsync.
+	run := func() {
+		if needKey {
+			var val string
+			var keyErr error
+			if a.keys == nil {
+				keyErr = errNoTitleKey
+			} else {
+				val, keyErr = a.keys.Get(cfg.ConnectionID)
+				if keyErr == nil && strings.TrimSpace(val) == "" {
+					keyErr = errNoTitleKey
+				}
+			}
+			if keyErr != nil {
+				a.ui(func() {
+					a.finishTitle(id, gen, manual, "", keyErr)
+				})
+				cancel()
+				return
+			}
+			cfg.APIKey = val
+		}
+		text, callErr := completeTitle(ctx, cfg, body)
 		cancel()
 		a.ui(func() {
-			a.finishTitle(id, gen, manual, text, err)
+			a.finishTitle(id, gen, manual, text, callErr)
 		})
-	})
+	}
+	if a.win != nil || a.titleAsync {
+		go run()
+		return
+	}
+	run()
+}
+
+func titleNeedsKey(cfg Config) bool {
+	if strings.TrimSpace(cfg.APIKey) != "" || strings.TrimSpace(cfg.ConnectionID) == "" {
+		return false
+	}
+	return !allowsEmptyKey(cfg)
 }
 
 func (a *App) finishTitle(id string, gen int, manual bool, text string, err error) {
@@ -307,16 +371,17 @@ func (a *App) dropTitleState(id string) {
 // that is still available wins. Otherwise the chat's own model is used.
 // The saved choice is left as it is either way. readKey fills the secret;
 // painting passes false so a frame does not touch the credential store.
-func (a *App) titleConfig(conv *Conversation, readKey bool) (Config, bool) {
+func (a *App) titleConfig(conv *Conversation, readKey bool) (cfg Config, usingChat, ok bool) {
 	if conv == nil {
-		return Config{}, false
+		return Config{}, false, false
 	}
 	if ref := a.data.TitleModel; ref != nil && a.titleModelAvailable(ref) {
-		if cfg, ok := a.configForTitleModel(ref, readKey); ok {
-			return cfg, true
+		if picked, ready := a.configForTitleModel(ref, readKey); ready {
+			return picked, false, true
 		}
 	}
-	return a.chatTitleConfig(conv, readKey)
+	cfg, ok = a.chatTitleConfig(conv, readKey)
+	return cfg, true, ok
 }
 
 func (a *App) titleModelAvailable(ref *TitleModel) bool {
@@ -512,37 +577,13 @@ func clipRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// titleOutputTokens is 256 for a reasoning model, where the provider may
-// count the reasoning itself toward the cap, and 32 otherwise.
-func titleOutputTokens(model string) int {
-	if titleReasoningModel(model) {
-		return titleTokensReason
-	}
-	return titleTokensNormal
-}
-
-func titleReasoningModel(model string) bool {
-	id := strings.ToLower(strings.TrimSpace(model))
-	leaf := id
-	if i := strings.LastIndex(id, "/"); i >= 0 {
-		leaf = id[i+1:]
-	}
-	if strings.Contains(id, "reason") || strings.Contains(id, "thinking") {
-		return true
-	}
-	for _, s := range []string{id, leaf} {
-		switch {
-		case strings.HasPrefix(s, "o1"), strings.HasPrefix(s, "o3"), strings.HasPrefix(s, "o4"), strings.HasPrefix(s, "gpt-5"):
-			return true
-		}
-	}
-	return false
-}
-
-// titleRequestBody is a non-streaming chat completion with reasoning at
-// its lowest setting and a short output cap. The chat's own temperature
-// and extra body are not copied.
-func titleRequestBody(cfg Config, turns []apiMessage) ([]byte, error) {
+// titleRequestBody is a non-streaming chat completion. The output cap is
+// 256 for every model: some providers count reasoning toward the cap, and
+// the client still cuts the title to 30 display-width units. omitReasoning
+// is set when this is the chat's own model and that chat's reasoning is
+// Default, which sends no reasoning fields. Otherwise the body carries the
+// lowest level that model family accepts.
+func titleRequestBody(cfg Config, turns []apiMessage, omitReasoning bool) ([]byte, error) {
 	if len(turns) == 0 {
 		return nil, errNoTitleInput
 	}
@@ -554,19 +595,127 @@ func titleRequestBody(cfg Config, turns []apiMessage) ([]byte, error) {
 		"messages": msgs,
 		"stream":   false,
 	}
-	cap := titleOutputTokens(cfg.Model)
 	if cfg.Provider == "OpenAI" {
-		payload["max_completion_tokens"] = cap
+		payload["max_completion_tokens"] = titleTokensReason
 	} else {
-		payload["max_tokens"] = cap
+		payload["max_tokens"] = titleTokensReason
 	}
-	off := cfg
-	off.Reasoning = effortOff
-	off.ExtraBody = ""
-	for k, v := range reasoningParams(off) {
-		payload[k] = v
+	if !omitReasoning {
+		for k, v := range titleReasoningParams(cfg) {
+			payload[k] = v
+		}
 	}
 	return json.Marshal(payload)
+}
+
+// titleReasoningParams is the lowest reasoning a title request may send.
+// Nil means the body stays a plain chat completion: the model rejects the
+// parameter (gpt-4o, grok-4, grok-3-mini) or the provider has no encoding.
+func titleReasoningParams(cfg Config) map[string]any {
+	leaf := modelLeaf(cfg.Model)
+	switch reasoningStyle(cfg) {
+	case "openai", "xai":
+		if reasoningUnsupported(cfg) || grokSkipsReasoning(leaf) {
+			return nil
+		}
+		effort, ok := openAITitleEffort(leaf)
+		if !ok {
+			return nil
+		}
+		return map[string]any{"reasoning_effort": effort}
+	case "openrouter":
+		return map[string]any{"reasoning": map[string]any{"effort": "none", "enabled": false}}
+	case "deepseek":
+		return map[string]any{"thinking": map[string]any{"type": "disabled"}}
+	case "ollama":
+		return map[string]any{"reasoning_effort": "none", "think": false}
+	default:
+		return nil
+	}
+}
+
+func modelLeaf(model string) string {
+	id := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(id, "/"); i >= 0 && i < len(id)-1 {
+		id = id[i+1:]
+	}
+	return id
+}
+
+// openAITitleEffort is the lowest reasoning_effort the family accepts.
+// o-series has no "none". gpt-5 before 5.1 has no "none" and uses minimal.
+// gpt-5.1 and newer accept none.
+func openAITitleEffort(leaf string) (string, bool) {
+	switch {
+	case strings.HasPrefix(leaf, "o1"), strings.HasPrefix(leaf, "o3"), strings.HasPrefix(leaf, "o4"):
+		return effortLow, true
+	case strings.HasPrefix(leaf, "gpt-5."):
+		return "none", true
+	case strings.HasPrefix(leaf, "gpt-5"):
+		return effortMinimal, true
+	case strings.HasPrefix(leaf, "gpt-4"), strings.HasPrefix(leaf, "gpt-3.5"), strings.HasPrefix(leaf, "chatgpt-"):
+		return "", false
+	case grokSkipsReasoning(leaf):
+		return "", false
+	default:
+		return "none", true
+	}
+}
+
+// grokSkipsReasoning reports Grok models that reject reasoning_effort.
+// grok-4.5 and newer are a different family and are not matched here.
+func grokSkipsReasoning(leaf string) bool {
+	if strings.HasPrefix(leaf, "grok-3-mini") {
+		return true
+	}
+	return strings.HasPrefix(leaf, "grok-4") && !strings.HasPrefix(leaf, "grok-4.")
+}
+
+var errNoTitleKey = errTitle("no title key")
+
+// completeTitle posts the body. A 400 is tried once more with every
+// reasoning field removed: a relay that rejects an unknown parameter
+// still answers a plain chat completion.
+func completeTitle(ctx context.Context, cfg Config, body []byte) (string, error) {
+	text, err := titleComplete(ctx, cfg, body)
+	if statusOf(err) != 400 {
+		return text, err
+	}
+	plain, ok := stripReasoningJSON(body)
+	if !ok {
+		return text, err
+	}
+	return titleComplete(ctx, cfg, plain)
+}
+
+func statusOf(err error) int {
+	var se *StatusError
+	if errors.As(err, &se) && se != nil {
+		return se.Status
+	}
+	return 0
+}
+
+func stripReasoningJSON(body []byte) ([]byte, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, false
+	}
+	changed := false
+	for _, key := range []string{"reasoning_effort", "reasoning", "thinking", "think"} {
+		if _, ok := payload[key]; ok {
+			delete(payload, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 var errNoTitleInput = errTitle("no title input")
@@ -640,30 +789,88 @@ func stripNumberMark(s string) (string, bool) {
 	return strings.TrimSpace(s[i+1:]), true
 }
 
+const titlePunct = ".。．!！?？…:：,，"
+
 // sanitizeTitle cleans a model title. False means the text was empty
-// after cleanup and the previous title should stay.
+// after cleanup and the previous title should stay. Quotes are removed
+// only from the ends, so an apostrophe inside a word stays.
 func sanitizeTitle(s string) (string, bool) {
+	var ok bool
+	s, ok = stripThinkBlocks(s)
+	if !ok {
+		return "", false
+	}
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	var b strings.Builder
 	for _, r := range s {
-		if isQuoteRune(r) || isEmojiRune(r) {
+		if isEmojiRune(r) {
 			continue
 		}
 		b.WriteRune(r)
 	}
-	s = strings.Join(strings.Fields(b.String()), " ")
-	s = strings.TrimRight(s, ".。．!！?？…")
-	s = strings.TrimSpace(s)
+	s = trimTitleEdges(strings.Join(strings.Fields(b.String()), " "))
 	if s == "" {
 		return "", false
 	}
-	s = truncateTitleWidth(s, titleWidthMax)
-	if strings.TrimSpace(s) == "" {
+	s = trimTitleEdges(truncateTitleWidth(s, titleWidthMax))
+	if s == "" {
 		return "", false
 	}
 	return s, true
+}
+
+// stripThinkBlocks drops closed reasoning wrappers such as <think>…</think>.
+// An opening tag with no closer is a failure: the model did not return a title.
+func stripThinkBlocks(s string) (string, bool) {
+	tags := []string{"think", "thinking", "reasoning"}
+	for {
+		lower := strings.ToLower(s)
+		openAt := -1
+		tag := ""
+		for _, name := range tags {
+			i := strings.Index(lower, "<"+name+">")
+			if i >= 0 && (openAt < 0 || i < openAt) {
+				openAt = i
+				tag = name
+			}
+		}
+		if openAt < 0 {
+			return s, true
+		}
+		closer := "</" + tag + ">"
+		rel := strings.Index(lower[openAt:], closer)
+		if rel < 0 {
+			return "", false
+		}
+		s = s[:openAt] + s[openAt+rel+len(closer):]
+	}
+}
+
+func trimTitleEdges(s string) string {
+	for {
+		next := strings.TrimSpace(s)
+		next = trimQuoteEdges(next)
+		next = strings.TrimRight(next, titlePunct)
+		next = strings.TrimSpace(next)
+		if next == s {
+			return s
+		}
+		s = next
+	}
+}
+
+func trimQuoteEdges(s string) string {
+	r := []rune(s)
+	i, j := 0, len(r)
+	for i < j && isQuoteRune(r[i]) {
+		i++
+	}
+	for j > i && isQuoteRune(r[j-1]) {
+		j--
+	}
+	return string(r[i:j])
 }
 
 func isQuoteRune(r rune) bool {
@@ -682,7 +889,12 @@ func isQuoteRune(r rune) bool {
 }
 
 func isEmojiRune(r rune) bool {
+	// Joiners and variation selectors are stripped even when they are left
+	// behind after the pictograph they were attached to.
 	if r == 0x200D || r == 0xFE0E || r == 0xFE0F || r == 0x20E3 {
+		return true
+	}
+	if r == 0x00A9 || r == 0x00AE { // © ®
 		return true
 	}
 	if r >= 0x1F3FB && r <= 0x1F3FF {
@@ -694,9 +906,15 @@ func isEmojiRune(r rune) bool {
 	// Emoji live in these blocks. Go's unicode package here has no
 	// Extended_Pictographic table, so the blocks stand in for it.
 	switch {
-	case r >= 0x1F300 && r <= 0x1FAFF:
+	case r >= 0x2300 && r <= 0x23FF: // ⌚ ⏰
+		return true
+	case r >= 0x25A0 && r <= 0x25FF:
 		return true
 	case r >= 0x2600 && r <= 0x27BF:
+		return true
+	case r >= 0x2B00 && r <= 0x2BFF: // ⬆ ⭐
+		return true
+	case r >= 0x1F300 && r <= 0x1FAFF:
 		return true
 	case r >= 0xE0020 && r <= 0xE007F:
 		return true

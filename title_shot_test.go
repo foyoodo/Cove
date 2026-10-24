@@ -38,23 +38,37 @@ func TestTitleScreenshots(t *testing.T) {
 	pair(tt, "title-temp")
 
 	fading := titleShotApp(t, done)
-	fading.instant = false
 	tf := ui.NewTester(fading.view, shotW, shotH)
-	fading.instant = false
-	fading.reduceMotion = false
-	fading.titleFades = map[string]titleFade{
-		"cancel": {from: long, start: tf.Now().Add(-100 * time.Millisecond), row: true, bar: true},
+	// Settle the theme before the cross-fade. SetDark while instant is
+	// false starts the theme animation, and the dark frame was captured
+	// still on the light side of that mix.
+	saveFade := func(dark bool, name string) {
+		t.Helper()
+		fading.instant = true
+		fading.reduceMotion = false
+		tf.SetDark(dark)
+		fading.instant = false
+		fading.titleFades = map[string]titleFade{
+			"cancel": {from: long, start: tf.Now().Add(-100 * time.Millisecond), row: true, bar: true},
+		}
+		tf.Frame()
+		if !tf.HasText(long) || !tf.HasText(done) {
+			t.Fatalf("fade shot missing both titles: %q", tf.Texts())
+		}
+		save(tf, name)
 	}
-	tf.Frame()
-	if !tf.HasText(long) || !tf.HasText(done) {
-		t.Fatalf("fade shot missing both titles: %q", tf.Texts())
-	}
-	pair(tf, "title-fade")
+	saveFade(false, "title-fade-light.png")
+	saveFade(true, "title-fade-dark.png")
+	fading.instant = true
+	tf.SetDark(false)
 
 	settled := titleShotApp(t, done)
 	ts := ui.NewTester(settled.view, shotW, shotH)
 	if !ts.HasText(done) {
 		t.Fatalf("done shot: %q", ts.Texts())
+	}
+	if !ts.HasText("Anthropic · claude-sonnet-4.5") || !ts.HasText("1.2k tokens") {
+		t.Fatalf("reply footer: %q", ts.Texts())
 	}
 	pair(ts, "title-done")
 
@@ -77,51 +91,42 @@ func TestTitleScreenshots(t *testing.T) {
 
 	ctxApp := titleShotApp(t, done)
 	tc := ui.NewTester(ctxApp.view, shotW, shotH)
-	row, ok := tc.Find("Go greet function")
-	if !ok {
-		t.Fatalf("sidebar row missing: %q", tc.Texts())
-	}
-	ctxApp.previewMenu = &previewMenu{
-		X: row.X + 24, Y: row.Y + 8,
-		Items: []previewItem{
-			{Label: "Rename"},
-			{Label: titleRegenLabel, Hot: true},
-			{Sep: true},
-			{Label: "Delete"},
-		},
-	}
-	tc.Frame()
+	showCtx(t, ctxApp, tc, "Go greet function, 2h", []shotMenuItem{
+		{Label: "Rename"},
+		{Label: titleRegenLabel, Hot: true},
+		{Sep: true},
+		{Label: "Delete"},
+	})
 	if !tc.HasText("context menu") || !tc.HasText(titleRegenLabel) {
 		t.Fatalf("context menu: %q", tc.Texts())
 	}
 	pair(tc, "ctx-menu")
+	framePaintHook = nil
 
 	dis := titleShotApp(t, done)
 	now := time.Now()
 	dis.data.Conversations = append([]Conversation{{
 		ID: "draft", Title: newChatTitle, CreatedAt: now, UpdatedAt: now, Loaded: true,
-		Config:   Config{Provider: "OpenAI", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1"},
+		Config: Config{
+			Provider: "OpenAI", Model: "gpt-4o-mini", ConnectionID: "openai",
+			BaseURL: "https://api.openai.com/v1",
+		},
 		Messages: []Message{},
 	}}, dis.data.Conversations...)
 	td := ui.NewTester(dis.view, shotW, shotH)
-	draft, ok := td.Find(newChatTitle)
-	if !ok {
-		t.Fatalf("draft row missing: %q", td.Texts())
-	}
-	dis.previewMenu = &previewMenu{
-		X: draft.X + 24, Y: draft.Y + 8,
-		Items: []previewItem{
-			{Label: "Rename"},
-			{Label: titleRegenLabel, Disabled: true},
-			{Sep: true},
-			{Label: "Delete"},
-		},
-	}
-	td.Frame()
-	if !td.HasText("Draft") {
+	// "New Chat" is also the empty-state copy. The row's access label is
+	// unique, and the menu has to open on that row rather than the title bar.
+	showCtx(t, dis, td, "New Chat, Draft", []shotMenuItem{
+		{Label: "Rename"},
+		{Label: titleRegenLabel, Disabled: true},
+		{Sep: true},
+		{Label: "Delete"},
+	})
+	if !td.HasText("Draft") || !td.HasText(titleRegenLabel+", disabled") {
 		t.Fatalf("disabled menu row: %q", td.Texts())
 	}
 	pair(td, "ctx-menu-disabled")
+	framePaintHook = nil
 
 	more := titleShotApp(t, done)
 	tm := ui.NewTester(more.view, shotW, shotH)
@@ -178,7 +183,7 @@ func TestTitleScreenshots(t *testing.T) {
 	if err := tu2.Click("Title model, grok-4-fast, unavailable. Titles use each chat’s model."); err != nil {
 		t.Fatal(err)
 	}
-	if !tu2.HasText(titleUnavailable) || !tu2.HasText(titleSameAsChat) {
+	if !tu2.HasText(titleUnavailable) || !tu2.HasText(titleSameAsChat) || !tu2.HasText("deepseek-reasoner") || !tu2.HasText("Together AI") {
 		t.Fatalf("unavailable menu: %q", tu2.Texts())
 	}
 	pair(tu2, "title-model-unavail-menu")
@@ -229,16 +234,93 @@ func titleSettingsApp(t *testing.T, on bool, model *TitleModel) *App {
 	return a
 }
 
+type shotMenuItem struct {
+	Label    string
+	Hot      bool
+	Disabled bool
+	Sep      bool
+}
+
+// showCtx draws the headless stand-in for the system context menu on the
+// sidebar row named by its access label, with the 2pt inset focus frame
+// from §20.4. The hook is test-only; production leaves it nil.
+func showCtx(t *testing.T, app *App, tt *ui.Tester, access string, items []shotMenuItem) {
+	t.Helper()
+	row, ok := tt.Find(access)
+	if !ok {
+		t.Fatalf("sidebar row %q missing: %q", access, tt.Texts())
+	}
+	if row.Y < 48 {
+		t.Fatalf("row %q is on the title bar at y %.1f", access, row.Y)
+	}
+	framePaintHook = func(a *App, c *ui.Context) {
+		if a != app {
+			return
+		}
+		paintShotMenu(c, a, row, items)
+	}
+	tt.Frame()
+}
+
+func paintShotMenu(c *ui.Context, a *App, row ui.Rect, items []shotMenuItem) {
+	p := a.look
+	ui.Box(c).Absolute().Left(row.X+2).Top(row.Y+2).Width(row.W-4).Height(row.H-4).Radius(radiusRow).Border(2, p.AccentDefault).PassThrough()
+	panel := ui.Column(c).Absolute().Left(row.X+12).Top(row.Y+4).Width(188).Radius(8).Background(p.LayerOverlay).Padding(4, 0).Label("context menu")
+	panel.Border(0.5, p.LayerOverlayBorder)
+	panel.Shadow(0, 10, 28, 0, p.ShadowMd)
+	panel.Children(func() {
+		for _, it := range items {
+			if it.Sep {
+				ui.Box(c).Height(1).FillWidth().Margin(4, 10).Background(p.SeparatorDefault)
+				continue
+			}
+			line := ui.Row(c).Height(22).FillWidth().Padding(0, 12).AlignItems(ui.Center).Radius(5)
+			fg := p.TextPrimary
+			label := it.Label
+			if it.Disabled {
+				fg = p.TextTertiary
+				label = it.Label + ", disabled"
+				line.Disabled(true)
+			}
+			if it.Hot && !it.Disabled {
+				line.Background(p.AccentDefault)
+				fg = p.TextOnAccent
+			}
+			line.Children(func() {
+				ui.Text(c, it.Label).FontSize(13).TextColor(fg).SingleLine()
+			})
+			line.Label(label)
+		}
+	})
+}
+
 func titleShotApp(t *testing.T, title string) *App {
 	t.Helper()
 	a := newTestApp(t)
-	a.data.Connections = []Connection{{
-		ID: "anthropic", Name: "Anthropic", Provider: "Anthropic",
-		ModelsSet: true,
-		Models:    []ProviderModel{{ID: "claude-sonnet-4.5", Enabled: true}},
-	}}
-	if err := a.keys.Set("anthropic", "sk-ant"); err != nil {
-		t.Fatal(err)
+	a.data.Connections = []Connection{
+		{ID: "openai", Name: "OpenAI", Provider: "OpenAI", BaseURL: "https://api.openai.com/v1", ModelsSet: true, Models: []ProviderModel{
+			{ID: "gpt-4o-mini", Enabled: true}, {ID: "gpt-4.1", Enabled: true},
+		}},
+		{ID: "anthropic", Name: "Anthropic", Provider: "Anthropic", BaseURL: "https://api.anthropic.com/v1", ModelsSet: true, Models: []ProviderModel{
+			{ID: "claude-sonnet-4.5", Enabled: true}, {ID: "opus-4", Enabled: true},
+		}},
+		{ID: "deepseek", Name: "DeepSeek", Provider: "DeepSeek", BaseURL: "https://api.deepseek.com/v1", ModelsSet: true, Models: []ProviderModel{
+			{ID: "deepseek-reasoner", Enabled: true},
+		}},
+		{ID: "openrouter", Name: "OpenRouter", Provider: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1", ModelsSet: true, Models: []ProviderModel{
+			{ID: "llama-3.3", Enabled: true}, {ID: "gemini-2.5", Enabled: true},
+		}},
+		{ID: "ollama", Name: "Ollama", Provider: "Ollama", BaseURL: "http://127.0.0.1:11434/v1", ModelsSet: true, Models: []ProviderModel{
+			{ID: "qwen-coder", Enabled: true},
+		}},
+		{ID: "together", Name: "Together AI", Provider: "Custom", Custom: true, BaseURL: "https://api.together.xyz/v1", Format: formatOpenAI, ModelsSet: true, Models: []ProviderModel{
+			{ID: "meta-llama/Llama-3-70b", Enabled: true},
+		}},
+	}
+	for _, id := range []string{"openai", "anthropic", "deepseek", "openrouter", "ollama", "together"} {
+		if err := a.keys.Set(id, "sk-test"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	now := time.Now()
 	stamp := time.Date(now.Year(), now.Month(), now.Day(), 9, 41, 0, 0, now.Location())
@@ -269,24 +351,24 @@ func titleShotApp(t *testing.T, title string) *App {
 			UpdatedAt: now.Add(-12 * time.Minute), CreatedAt: now.Add(-12 * time.Minute),
 			Loaded: true,
 			Config: Config{
-				Provider: "Anthropic", Model: "claude-sonnet-4.5", BaseURL: "https://api.anthropic.com/v1",
+				Provider: "Anthropic", Model: "claude-sonnet-4.5", ConnectionID: "anthropic", BaseURL: "https://api.anthropic.com/v1",
 				Temperature: f64p(0.7), MaxTokens: 4096, Reasoning: "medium",
 				SystemPrompt: "Answer concisely. Prefer Go examples.",
 			},
 			Messages: []Message{
 				{ID: "u0", Role: roleUser, Content: "What’s the difference between Client.Timeout and a context deadline?", Done: true, CreatedAt: stamp.Add(-10 * time.Minute)},
-				{ID: "a0", Role: roleAssistant, Content: "`Client.Timeout` bounds the whole exchange — dial, headers and reading the body — and applies to every request the client makes. A context deadline belongs to one request and can be cancelled early.", Tokens: 640, ElapsedMS: 2100, Done: true, CreatedAt: stamp.Add(-10 * time.Minute)},
+				{ID: "a0", Role: roleAssistant, Content: "`Client.Timeout` bounds the whole exchange — dial, headers and reading the body — and applies to every request the client makes. A context deadline belongs to one request and can be cancelled early.", Model: "claude-sonnet-4.5", ProviderName: "Anthropic", ProviderKind: "Anthropic", ProviderID: "anthropic", Tokens: 640, ElapsedMS: 2100, Done: true, CreatedAt: stamp.Add(-10 * time.Minute)},
 				{ID: "u", Role: roleUser, Content: "How do I cancel an in-flight HTTP request when the window closes?", Done: true, CreatedAt: stamp},
-				{ID: "a", Role: roleAssistant, Content: reply, Reasoning: "The user wants cancellation tied to the window lifecycle.", ThinkingMS: 12000, Tokens: 1200, ElapsedMS: 3400, Done: true, CreatedAt: stamp},
+				{ID: "a", Role: roleAssistant, Content: reply, Reasoning: "The user wants cancellation tied to the window lifecycle.", ThinkingMS: 12000, Model: "claude-sonnet-4.5", ProviderName: "Anthropic", ProviderKind: "Anthropic", ProviderID: "anthropic", Tokens: 1200, ElapsedMS: 3400, Done: true, CreatedAt: stamp},
 			},
 		},
-		{ID: "greet", Title: "Go greet function", UpdatedAt: now.Add(-2 * time.Hour), CreatedAt: now.Add(-2 * time.Hour), Config: Config{Provider: "OpenAI", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1"}, Messages: []Message{{ID: "g", Role: roleUser, Content: "Write a Go greet function.", Done: true}}},
-		{ID: "fsync", Title: "fsync before rename", UpdatedAt: now.Add(-26 * time.Hour), CreatedAt: now.Add(-26 * time.Hour), Config: Config{Provider: "DeepSeek", Model: "deepseek-reasoner", BaseURL: "https://api.deepseek.com/v1"}, Messages: []Message{{ID: "f", Role: roleUser, Content: "Why fsync the temp file before rename?", Done: true}}},
-		{ID: "trip", Title: "Weekend trip outline", UpdatedAt: now.Add(-30 * time.Hour), CreatedAt: now.Add(-30 * time.Hour), Config: Config{Provider: "OpenRouter", Model: "llama-3.3", BaseURL: "https://openrouter.ai/api/v1"}, Messages: []Message{{ID: "t", Role: roleUser, Content: "Outline a weekend in Lisbon.", Done: true}}},
-		{ID: "wal", Title: "SQLite WAL vs rollback journal", UpdatedAt: now.Add(-3 * 24 * time.Hour), CreatedAt: now.Add(-3 * 24 * time.Hour), Config: Config{Provider: "OpenAI", Model: "gpt-4.1", BaseURL: "https://api.openai.com/v1"}, Messages: []Message{{ID: "w", Role: roleUser, Content: "Compare WAL and a rollback journal.", Done: true}}},
-		{ID: "metal", Title: "Metal blur shader notes", UpdatedAt: now.Add(-5 * 24 * time.Hour), CreatedAt: now.Add(-5 * 24 * time.Hour), Config: Config{Provider: "Ollama", Model: "qwen-coder", BaseURL: "http://127.0.0.1:11434/v1"}, Messages: []Message{{ID: "m", Role: roleUser, Content: "Notes on a Metal blur shader.", Done: true}}},
-		{ID: "tok", Title: "Tokenizer edge cases", UpdatedAt: time.Date(now.Year(), 9, 12, 10, 0, 0, 0, now.Location()), CreatedAt: time.Date(now.Year(), 9, 12, 10, 0, 0, 0, now.Location()), Config: Config{Provider: "Anthropic", Model: "opus-4", BaseURL: "https://api.anthropic.com/v1"}, Messages: []Message{{ID: "k", Role: roleUser, Content: "Tokenizer edge cases.", Done: true}}},
-		{ID: "read", Title: "Reading list for October", UpdatedAt: time.Date(now.Year(), 9, 3, 10, 0, 0, 0, now.Location()), CreatedAt: time.Date(now.Year(), 9, 3, 10, 0, 0, 0, now.Location()), Config: Config{Provider: "OpenRouter", Model: "gemini-2.5", BaseURL: "https://openrouter.ai/api/v1"}, Messages: []Message{{ID: "r", Role: roleUser, Content: "Reading list for October.", Done: true}}},
+		{ID: "greet", Title: "Go greet function", UpdatedAt: now.Add(-2 * time.Hour), CreatedAt: now.Add(-2 * time.Hour), Config: Config{Provider: "OpenAI", Model: "gpt-4o-mini", ConnectionID: "openai", BaseURL: "https://api.openai.com/v1"}, Messages: []Message{{ID: "g", Role: roleUser, Content: "Write a Go greet function.", Done: true}}},
+		{ID: "fsync", Title: "fsync before rename", UpdatedAt: now.Add(-26 * time.Hour), CreatedAt: now.Add(-26 * time.Hour), Config: Config{Provider: "DeepSeek", Model: "deepseek-reasoner", ConnectionID: "deepseek", BaseURL: "https://api.deepseek.com/v1"}, Messages: []Message{{ID: "f", Role: roleUser, Content: "Why fsync the temp file before rename?", Done: true}}},
+		{ID: "trip", Title: "Weekend trip outline", UpdatedAt: now.Add(-30 * time.Hour), CreatedAt: now.Add(-30 * time.Hour), Config: Config{Provider: "OpenRouter", Model: "llama-3.3", ConnectionID: "openrouter", BaseURL: "https://openrouter.ai/api/v1"}, Messages: []Message{{ID: "t", Role: roleUser, Content: "Outline a weekend in Lisbon.", Done: true}}},
+		{ID: "wal", Title: "SQLite WAL vs rollback journal", UpdatedAt: now.Add(-3 * 24 * time.Hour), CreatedAt: now.Add(-3 * 24 * time.Hour), Config: Config{Provider: "OpenAI", Model: "gpt-4.1", ConnectionID: "openai", BaseURL: "https://api.openai.com/v1"}, Messages: []Message{{ID: "w", Role: roleUser, Content: "Compare WAL and a rollback journal.", Done: true}}},
+		{ID: "metal", Title: "Metal blur shader notes", UpdatedAt: now.Add(-5 * 24 * time.Hour), CreatedAt: now.Add(-5 * 24 * time.Hour), Config: Config{Provider: "Ollama", Model: "qwen-coder", ConnectionID: "ollama", BaseURL: "http://127.0.0.1:11434/v1"}, Messages: []Message{{ID: "m", Role: roleUser, Content: "Notes on a Metal blur shader.", Done: true}}},
+		{ID: "tok", Title: "Tokenizer edge cases", UpdatedAt: time.Date(now.Year(), 9, 12, 10, 0, 0, 0, now.Location()), CreatedAt: time.Date(now.Year(), 9, 12, 10, 0, 0, 0, now.Location()), Config: Config{Provider: "Anthropic", Model: "opus-4", ConnectionID: "anthropic", BaseURL: "https://api.anthropic.com/v1"}, Messages: []Message{{ID: "k", Role: roleUser, Content: "Tokenizer edge cases.", Done: true}}},
+		{ID: "read", Title: "Reading list for October", UpdatedAt: time.Date(now.Year(), 9, 3, 10, 0, 0, 0, now.Location()), CreatedAt: time.Date(now.Year(), 9, 3, 10, 0, 0, 0, now.Location()), Config: Config{Provider: "Custom", Model: "meta-llama/Llama-3-70b", ConnectionID: "together", BaseURL: "https://api.together.xyz/v1"}, Messages: []Message{{ID: "r", Role: roleUser, Content: "Reading list for October.", Done: true}}},
 	}
 	a.data.ActiveID = "cancel"
 	return a

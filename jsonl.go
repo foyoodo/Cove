@@ -628,6 +628,7 @@ func readChatConn(path string, defaults Config, conns []Connection) (Conversatio
 	}
 	conv.MessageCount = len(conv.Messages)
 	conv.DraftOnly = len(conv.Messages) == 0 && (strings.TrimSpace(conv.Draft) != "" || len(conv.DraftQuotes) > 0)
+	protectLegacyTitle(&conv)
 	conv.diskFinal = len(finalMessages(conv))
 	conv.diskHeader = headerKey(conv, defaults)
 	if conns != nil {
@@ -876,6 +877,9 @@ func convFromIndex(e indexEntry) Conversation {
 	if c.Title == "" {
 		c.Title = newChatTitle
 	}
+	// The index does not store titleSource. A row that already has
+	// messages is a chat from before that field existed.
+	protectLegacyTitle(&c)
 	return c
 }
 

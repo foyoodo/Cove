@@ -359,7 +359,10 @@ func (a *App) settingsTitles(c *ui.Context) {
 func (a *App) titleModelButton(c *ui.Context, unavailable bool) ui.Element {
 	p := a.look
 	b := ui.ButtonBase(c.Key("settings-title-model"))
-	b.Height(22).MinWidth(160).MaxWidth(300).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+	// Compact and pinned to the trailing edge of the settings row.
+	// §20.7 uses the popup mark (chevron up over chevron down), the same
+	// 22pt control height as the other settings popup buttons.
+	b.Height(22).MaxWidth(220).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 	ref := a.data.TitleModel
 	switch {
 	case unavailable && ref != nil:
@@ -372,16 +375,21 @@ func (a *App) titleModelButton(c *ui.Context, unavailable bool) ui.Element {
 	b.Children(func() {
 		if unavailable && ref != nil {
 			ui.Icon(c, iconAlert).Size(12, 12).TextColor(p.StatusWarning).Shrink(0)
-			controlText(c, ref.ModelID, 13, 0, 400, p.TextPrimary).Ellipsis("…").Grow(1).Shrink(1).MinWidth(0)
+			controlText(c, ref.ModelID, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
 		} else if ref == nil {
-			controlText(c, titleSameAsChat, 13, 0, 400, p.TextPrimary).SingleLine()
+			controlText(c, titleSameAsChat, 13, 0, 400, p.TextPrimary).SingleLine().Shrink(0)
 		} else {
 			cfg := a.titleModelConfig(ref)
 			ui.Box(c).Size(6, 6).Radius(3).Background(a.configColor(cfg)).Shrink(0)
 			prov, model := a.generalModelParts(cfg)
-			a.generalModelLabel(c, prov, model, p.TextPrimary)
+			if prov != "" {
+				controlText(c, prov+" ·", 13, 0, 400, p.TextPrimary).NoWrap().Shrink(0)
+				controlText(c, " "+model, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
+			} else {
+				controlText(c, model, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
+			}
 		}
-		ui.Icon(c, iconChevron).Size(11, 11).TextColor(p.TextSecondary).Shrink(0)
+		ui.Icon(c, iconPopup).Size(12, 12).TextColor(p.TextSecondary).Shrink(0)
 	})
 	items, footer, search := a.titleModelEntries()
 	now := c.Now()
@@ -461,12 +469,12 @@ func (a *App) titleModelEntries() (items, footer []popEntry, search bool) {
 		}
 		id := modelChoiceID(opt.connID, opt.model)
 		on := ref != nil && ref.ProviderID == opt.connID && ref.ModelID == opt.model
+		// The provider is the group header. The row is the model id, the
+		// same as the composer menu. Search still matches the provider
+		// through Group. §11.3 does not ask rows to read "Provider · model".
 		items = append(items, popEntry{
-			Kind: popItem, ID: id, Text: opt.provider + " · " + opt.model, Group: opt.provider,
+			Kind: popItem, ID: id, Text: opt.model, Group: opt.provider,
 			Checkable: true, Checked: on,
-			Body: func(c *ui.Context, fg ui.Color) {
-				a.modelPickLabel(c, opt.provider, opt.model, fg)
-			},
 		})
 	}
 	footer = []popEntry{{

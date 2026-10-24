@@ -173,7 +173,9 @@ func (a *App) view(c *ui.Context) {
 	// A request the composer did not take (no field, or a sheet opened
 	// over it in this frame) does not fire on a later frame.
 	a.focusComposerID = ""
-	a.paintPreviewMenu(c)
+	if framePaintHook != nil {
+		framePaintHook(a, c)
+	}
 }
 
 // paintWindowBackground lives in gradient.go. It draws one cached bitmap
@@ -803,7 +805,7 @@ func (a *App) titleBar(c *ui.Context, conv *Conversation) {
 			if !p.Focused || a.titleDimmed(conv.ID, true) {
 				titleColor = p.TextSecondary
 			}
-			a.fadingTitle(c, conv.ID, conv.Title, true, 14, 600, titleColor, false)
+			a.fadingTitle(c, conv.ID, conv.Title, true, 13, 600, titleColor, false)
 			ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
 				ui.Box(c).Size(6, 6).Radius(3).Background(a.configColor(conv.Config)).Shrink(0)
 				ui.Text(c, a.subtleModel(conv)).FontSize(11).TextColor(p.TextSecondary).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)

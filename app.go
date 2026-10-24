@@ -326,7 +326,12 @@ type App struct {
 	sideQuery   string
 	sideKeep    map[string]bool
 	sideClock   time.Time
-	previewMenu *previewMenu
+
+	// titleAsync runs a title request on a goroutine without a window.
+	// uiSync, when set, receives the callback that a window would run on
+	// the main thread. Both stay unset in the app.
+	titleAsync bool
+	uiSync     func(func())
 }
 
 // NewApp loads conversations from path. A missing file starts empty. A
@@ -361,8 +366,8 @@ func openApp(path string, keys keyring) *App {
 	a.assumeStoredKeys()
 	a.migrateSecrets()
 	a.adoptProviders()
-	if silenceAutoTitles {
-		a.data.AutoTitles = false
+	if openAppHook != nil {
+		openAppHook(a)
 	}
 	return a
 }
@@ -806,6 +811,9 @@ func (a *App) beginRename() {
 	if conv == nil {
 		return
 	}
+	// A title that arrives after the field opens would replace the name
+	// the user is typing. Drop the in-flight request instead.
+	a.cancelTitle(conv.ID, false)
 	a.renameText = conv.Title
 	a.renameOpen = true
 }
@@ -820,6 +828,7 @@ func (a *App) commitRename() {
 	if title == "" {
 		title = newChatTitle
 	}
+	a.cancelTitle(conv.ID, false)
 	conv.Title = title
 	conv.TitleSource = titleSourceManual
 	a.touch(conv)
@@ -1246,9 +1255,12 @@ func (a *App) send(text string) bool {
 		if strings.TrimSpace(titleSrc) == "" && len(conv.DraftQuotes) > 0 {
 			titleSrc = conv.DraftQuotes[0].Text
 		}
+		// temp even when the visible title stays "New Chat", so the one
+		// automatic request still runs. A legacy chat already has messages
+		// and does not enter this branch.
+		conv.TitleSource = titleSourceTemp
 		if title := temporaryTitle(titleSrc); title != newChatTitle {
 			conv.Title = title
-			conv.TitleSource = titleSourceTemp
 		}
 	}
 	quotes := append([]Quote(nil), conv.DraftQuotes...)
@@ -1312,8 +1324,7 @@ func (a *App) startReply(conv *Conversation) {
 			m.Error = explainAPIError(err)
 		}
 		a.noteProviderAuth(convID, err)
-		a.saveSync()
-		a.maybeAutoTitle(convID)
+		a.finishReplyTitle(convID)
 	}
 	if bodyErr != nil {
 		fail(bodyErr)
@@ -1484,8 +1495,21 @@ func (a *App) finishReply(convID, msgID string, gen int, text, thought string, e
 			a.announce = "Reply ready"
 		}
 	}
+	a.finishReplyTitle(convID)
+}
+
+// finishReplyTitle records the one automatic attempt on the save that
+// already ends the reply, then starts the request. A second save here
+// would run on the UI thread for every first reply.
+func (a *App) finishReplyTitle(convID string) {
+	armed := a.markAutoTitle(convID)
 	a.saveSync()
-	a.maybeAutoTitle(convID)
+	if !armed {
+		return
+	}
+	if conv := a.conversation(convID); conv != nil {
+		a.startTitle(conv, false, false)
+	}
 }
 
 // applyStream copies a batched delta onto the message when gen is still current.
@@ -1784,6 +1808,10 @@ func (a *App) launch(fn func()) {
 func (a *App) ui(fn func()) {
 	if a.win != nil {
 		a.win.Update(fn)
+		return
+	}
+	if a.uiSync != nil {
+		a.uiSync(fn)
 		return
 	}
 	fn()
