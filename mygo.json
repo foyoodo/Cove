@@ -1,7 +1,7 @@
 {
   "name": "Cove",
   "identifier": "dev.cove.chat",
-  "version": "0.7.0",
+  "version": "0.7.0-rc.4",
   "copyright": "Copyright © 2026",
   "out": "build",
   "macos": {
