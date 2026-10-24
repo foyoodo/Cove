@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"cove/themes"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -282,6 +284,25 @@ func TestEditCancelFocusesComposer(t *testing.T) {
 	requireComposer(t, a, tt)
 }
 
+func TestEditResendFocusesComposer(t *testing.T) {
+	a, tt := focusChats(t)
+	if err := tt.Click("Edit"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.edit.convID == "" {
+		t.Fatal("edit did not open")
+	}
+	if err := tt.Click("Send edit"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.edit.convID != "" {
+		t.Fatal("Save & Resend left edit mode on")
+	}
+	requireComposer(t, a, tt)
+}
+
 func TestSearchCommitAndEscape(t *testing.T) {
 	a, tt := focusChats(t)
 	tt.Key(ui.Cmd, ui.KeyK)
@@ -544,6 +565,71 @@ func TestNewSessionShortcutFocusesComposer(t *testing.T) {
 	}
 }
 
+func TestNewSessionButtonFocusesComposer(t *testing.T) {
+	a, tt := focusChats(t)
+	if err := tt.Click("Search"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("New Session"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	requireComposer(t, a, tt)
+	if a.active() == nil || len(a.active().Breaks) == 0 || a.active().Breaks[len(a.active().Breaks)-1].Kind != sessionManual {
+		t.Fatal("New Session button did not insert a session break")
+	}
+}
+
+func TestNewSessionMenuFocusesComposer(t *testing.T) {
+	a, tt := focusChats(t)
+	a.menu()
+	tt.Frame()
+	if a.newSessionItem == nil || !a.newSessionItem.IsEnabled() {
+		t.Fatal("Chat > New Session is disabled")
+	}
+	if err := tt.Click("Search"); err != nil {
+		t.Fatal(err)
+	}
+	a.newSessionItem.Click(a.newSessionItem, nil)
+	tt.Frame()
+	requireComposer(t, a, tt)
+	if a.active() == nil || len(a.active().Breaks) == 0 || a.active().Breaks[len(a.active().Breaks)-1].Kind != sessionManual {
+		t.Fatal("Chat > New Session did not insert a session break")
+	}
+}
+
+func TestStopClickFocusesComposer(t *testing.T) {
+	a, tt := focusChats(t)
+	armStream(t, a)
+	tt.Frame()
+	if err := tt.Click("Search"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Stop"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	requireComposer(t, a, tt)
+	if a.isStreaming(a.active().ID) {
+		t.Fatal("Stop left the reply running")
+	}
+}
+
+func TestRegenerateShortcutFocusesComposer(t *testing.T) {
+	a, tt := focusChats(t)
+	last := a.active().Messages[len(a.active().Messages)-1].ID
+	if err := tt.Click("Search"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyR)
+	tt.Frame()
+	requireComposer(t, a, tt)
+	msgs := a.active().Messages
+	if len(msgs) == 0 || msgs[len(msgs)-1].ID == last {
+		t.Fatal("⌘R did not start a new reply")
+	}
+}
+
 func sampleAt(tt *ui.Tester, x, y float32) color.RGBA {
 	img := tt.Image()
 	b := img.Bounds()
@@ -673,7 +759,11 @@ func TestFocusRingShots(t *testing.T) {
 		shotQuoteRing(t, dir, suffix)
 		shotDialogRing(t, dir, suffix)
 		shotContrastRings(t, dir, suffix, dark)
+		shotExtraRings(t, dir, suffix, dark)
 	}
+	shotContrastAccent(t, dir, "contrast-sidebar-orange-light.png", false, "orange")
+	shotContrastAccent(t, dir, "contrast-sidebar-green-light.png", false, "green")
+	shotContrastAccent(t, dir, "contrast-sidebar-purple-dark.png", true, "purple")
 	writeFocusGallery(t, dir)
 }
 
@@ -991,6 +1081,115 @@ func shotContrastRings(t *testing.T, dir, suffix string, dark bool) {
 		t.Fatal("contrast search field")
 	}
 	cropSearchRing(t, dir, "contrast-field-"+suffix+".png", tt)
+}
+
+func shotExtraRings(t *testing.T, dir, suffix string, dark bool) {
+	t.Helper()
+	a, tt := focusChats(t)
+	a.active().Messages[1].Content = "ans\n\n```\nfmt.Println(1)\n```\n"
+	tt.SetDark(dark)
+	tt.Frame()
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "Copy", 16) {
+		t.Fatal("Copy is not a tab stop")
+	}
+	btn, ok := tt.FocusedRect("Copy")
+	if !ok {
+		t.Fatal("Copy rect")
+	}
+	tt.ClickAt(btn.X+btn.W/2, btn.Y+btn.H/2)
+	tt.Frame()
+	if a.settled.visible {
+		t.Fatal("click left a ring on Copy")
+	}
+	writeCrop(t, dir, "copy-click-"+suffix+".png", tt, "Copy", btn, 14)
+
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "More", 16) {
+		t.Fatal("More is not a tab stop")
+	}
+	tt.KeyDown(ui.KeyDown)
+	tt.KeyUp(ui.KeyDown)
+	tt.Frame()
+	if !a.popupOpen() {
+		t.Fatal("keyboard did not open More")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.popupOpen() || !tt.Focused("More") || !a.settled.visible {
+		t.Fatalf("Esc menu open=%v more=%v ring=%v", a.popupOpen(), tt.Focused("More"), a.settled.visible)
+	}
+	cropLabeled(t, dir, "more-restore-"+suffix+".png", tt, "More", 14, 48, 48)
+
+	tt.Key(ui.Cmd, ui.KeyF)
+	tt.Frame()
+	if !tt.Focused("Find in chat") {
+		t.Fatal("find field")
+	}
+	cropLabeled(t, dir, "find-"+suffix+".png", tt, "Find in chat", 10, 36, 0)
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("Rename"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.Focused("Name") {
+		t.Fatal("rename field")
+	}
+	cropLabeled(t, dir, "rename-"+suffix+".png", tt, "Name", 10, 40, 0)
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("Appearance"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	writeFocusPNG(t, filepath.Join(dir, "appearance-"+suffix+".png"), tt.Image())
+}
+
+func shotContrastAccent(t *testing.T, dir, name string, dark bool, accentID string) {
+	t.Helper()
+	accent, ok := themes.NamedAccent(accentID, dark)
+	if !ok {
+		t.Fatalf("accent %s", accentID)
+	}
+	want := themes.FocusContrastRing(accentID, dark)
+	a, tt := focusChats(t)
+	tt.SetDark(dark)
+	tt.Frame()
+	tt.SetPreferences(ui.Preferences{FullKeyboardAccess: true, HighContrast: true, TextScale: 1, Accent: accent})
+	focusDraft(t, tt)
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	row := chatRowRect(t, tt, "Focus")
+	if !rectHasColor(tt, row, want, 18) {
+		t.Fatalf("%s ring is not %v", name, want)
+	}
+	writeCrop(t, dir, name, tt, "Focus", row, 12)
+}
+
+func rectHasColor(tt *ui.Tester, r ui.Rect, want ui.Color, tol int) bool {
+	target := color.RGBA{R: want.R, G: want.G, B: want.B, A: 255}
+	x0, y0 := int(r.X), int(r.Y)
+	x1, y1 := int(r.X+r.W), int(r.Y+r.H)
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			if rgbaDelta(sampleAt(tt, float32(x), float32(y)), target) <= tol {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func shotQuoteRing(t *testing.T, dir, suffix string) {

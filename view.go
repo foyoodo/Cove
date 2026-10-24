@@ -2239,7 +2239,7 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation, slot string) ui.Elem
 	fg := p.TextSecondary
 	switch {
 	case unsupported:
-		b.Opacity(0.45)
+		b.Opacity(0.45).Cursor(ui.CursorDefault)
 	case b.Pressed():
 		b.Background(p.FillPressed)
 		fg = p.TextPrimary

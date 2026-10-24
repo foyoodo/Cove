@@ -914,6 +914,35 @@ func TestSearchEscapeAfterSettingsKeepsSidebar(t *testing.T) {
 	requireSidebar(t, a, "Focus")
 }
 
+func TestKeyboardFocusDoesNotShowTooltip(t *testing.T) {
+	_, tt := focusChats(t)
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "New Session", 12) {
+		t.Fatal("New Session is not a tab stop")
+	}
+	tt.Advance(2 * time.Second)
+	tt.Frame()
+	if tt.HasText("⇧⌘N") {
+		t.Fatal("Tab focus opened the New Session tooltip")
+	}
+	btn, ok := tt.Find("New Session")
+	if !ok {
+		t.Fatal("New Session button")
+	}
+	tt.Advance(time.Millisecond)
+	tt.Move(btn.X+btn.W/2, btn.Y+btn.H/2)
+	tt.Frame()
+	if tt.HasText("⇧⌘N") {
+		t.Fatal("tooltip showed before the pointer had rested")
+	}
+	tt.Advance(600 * time.Millisecond)
+	tt.Frame()
+	if !tt.HasText("⇧⌘N") {
+		t.Fatalf("hover tooltip missing: %q", tt.Texts())
+	}
+}
+
 func TestUnsupportedReasoningIsNotATabStop(t *testing.T) {
 	_, tt := focusChats(t)
 	chip, ok := tt.Find("Reasoning: Default")
@@ -924,6 +953,9 @@ func TestUnsupportedReasoningIsNotATabStop(t *testing.T) {
 	// so this hover is the later one, then rest past the tooltip delay.
 	tt.Advance(time.Millisecond)
 	tt.Move(chip.X+chip.W/2, chip.Y+chip.H/2)
+	if tt.Cursor() != ui.CursorDefault {
+		t.Fatalf("unsupported reasoning chip cursor %v", tt.Cursor())
+	}
 	tt.Advance(1500 * time.Millisecond)
 	tt.Frame()
 	if !tt.HasText("This model doesn't support reasoning effort.") {

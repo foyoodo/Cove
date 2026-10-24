@@ -2437,12 +2437,11 @@ func Toolbar(c *Context, fn func()) Element {
 
 // TooltipBase shows a tip without a look by anchor: fn styles the tip and
 // builds its content. It shows once the pointer has rested on anchor for
-// 0.6 seconds, at once as anchor gets the keyboard focus from the
-// keyboard, and at once too within 0.4 seconds of another tip going, as
-// the pointer moves along a toolbar. It goes as the pointer leaves anchor
-// or presses it, and with Escape, until the pointer comes back or the
-// focus does. Over elements inside one another, the innermost one's tip
-// shows; one shows at a time.
+// 0.6 seconds, and at once within 0.4 seconds of another tip going, as
+// the pointer moves along a toolbar. Keyboard focus does not open a tip.
+// It goes as the pointer leaves anchor or presses it, and with Escape,
+// until the pointer comes back. Over elements inside one another, the
+// innermost one's tip shows; one shows at a time.
 //
 // The tip goes above anchor, centered, or below it where there is no room
 // above; fn may place it elsewhere with AttachTo, as after it:
@@ -5507,9 +5506,9 @@ func (_handle Element) Timeline(key any, o TimelineOptions) *Timeline {
 	return _node.Timeline(key, o)
 }
 
-// Tooltip shows s by the element when the pointer rests on it, or the
-// keyboard focus comes to it, as TooltipBase does: above the element,
-// centered, or below it where there is no room above. It describes the
+// Tooltip shows s by the element when the pointer rests on it, as
+// TooltipBase does: above the element, centered, or below it where there
+// is no room above. Keyboard focus does not open it. It describes the
 // element to assistive technology where Description does not.
 func (_handle Element) Tooltip(s string) Element {
 	_node := _handle.node()
