@@ -62,6 +62,10 @@ type settingsDoc struct {
 	KeepLastRequest bool         `json:"keepLastRequest"`
 	TimeoutSec      int          `json:"timeoutSec,omitempty"`
 	MaxRounds       int          `json:"maxRounds,omitempty"`
+	// AutoTitles is a pointer so a file from before this field keeps the
+	// default (on). A bool would read a missing key as false.
+	AutoTitles *bool       `json:"autoTitles,omitempty"`
+	TitleModel *TitleModel `json:"titleModel,omitempty"`
 }
 
 type indexDoc struct {
@@ -85,17 +89,19 @@ type indexEntry struct {
 }
 
 type chatHeader struct {
-	Type        string          `json:"type"`
-	Schema      int             `json:"schema"`
-	ID          string          `json:"id"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	Title       string          `json:"title"`
-	UpdatedAt   time.Time       `json:"updatedAt,omitempty"`
-	Draft       string          `json:"draft,omitempty"`
-	DraftQuotes []Quote         `json:"draftQuotes,omitempty"`
-	Settings    json.RawMessage `json:"settings"`
-	MaxRounds   int             `json:"maxRounds,omitempty"`
-	SwitchNote  string          `json:"switchNote,omitempty"`
+	Type           string          `json:"type"`
+	Schema         int             `json:"schema"`
+	ID             string          `json:"id"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	Title          string          `json:"title"`
+	UpdatedAt      time.Time       `json:"updatedAt,omitempty"`
+	Draft          string          `json:"draft,omitempty"`
+	DraftQuotes    []Quote         `json:"draftQuotes,omitempty"`
+	Settings       json.RawMessage `json:"settings"`
+	MaxRounds      int             `json:"maxRounds,omitempty"`
+	SwitchNote     string          `json:"switchNote,omitempty"`
+	TitleSource    string          `json:"titleSource,omitempty"`
+	TitleGenerated bool            `json:"titleGenerated,omitempty"`
 }
 
 // configOverride is the Chat Settings fields that differ from the global
@@ -308,7 +314,9 @@ func headerKey(c Conversation, defaults Config) string {
 		Rounds  int             `json:"maxRounds,omitempty"`
 		Note    string          `json:"switchNote,omitempty"`
 		Quotes  []Quote         `json:"draftQuotes,omitempty"`
-	}{c.Title, c.CreatedAt, raw, c.MaxRounds, c.SwitchNote, c.DraftQuotes})
+		Source  string          `json:"titleSource,omitempty"`
+		Gen     bool            `json:"titleGenerated,omitempty"`
+	}{c.Title, c.CreatedAt, raw, c.MaxRounds, c.SwitchNote, c.DraftQuotes, c.TitleSource, c.TitleGenerated})
 	return string(b)
 }
 
@@ -360,6 +368,7 @@ func encodeHeader(c Conversation, defaults Config) ([]byte, error) {
 		Type: "chat", Schema: chatSchema, ID: c.ID, CreatedAt: c.CreatedAt,
 		Title: c.Title, UpdatedAt: c.UpdatedAt, Draft: c.Draft, DraftQuotes: c.DraftQuotes, Settings: raw,
 		MaxRounds: c.MaxRounds, SwitchNote: c.SwitchNote,
+		TitleSource: c.TitleSource, TitleGenerated: c.TitleGenerated,
 	}
 	b, err := json.Marshal(h)
 	if err != nil {
@@ -547,10 +556,12 @@ func readChatConn(path string, defaults Config, conns []Connection) (Conversatio
 	conv := Conversation{
 		ID: header.ID, Title: header.Title, CreatedAt: header.CreatedAt,
 		UpdatedAt: header.UpdatedAt, Draft: header.Draft, DraftQuotes: header.DraftQuotes,
-		Config:     applyOverrides(defaults, header.Settings),
-		MaxRounds:  clampRounds(header.MaxRounds),
-		SwitchNote: header.SwitchNote,
-		Messages:   []Message{}, Loaded: true,
+		Config:         applyOverrides(defaults, header.Settings),
+		MaxRounds:      clampRounds(header.MaxRounds),
+		SwitchNote:     header.SwitchNote,
+		TitleSource:    header.TitleSource,
+		TitleGenerated: header.TitleGenerated,
+		Messages:       []Message{}, Loaded: true,
 	}
 	if conv.UpdatedAt.IsZero() {
 		conv.UpdatedAt = conv.CreatedAt
@@ -677,7 +688,7 @@ func writeSettings(root string, data *StoreData) error {
 		ActiveID: data.ActiveID, SidebarWidth: data.SidebarWidth, Appearance: data.Appearance,
 		Theme: data.Theme, SendWith: data.SendWith, ShowReasoning: data.ShowReasoning,
 		RestoreLast: data.RestoreLast, KeepLastRequest: data.KeepLastRequest, TimeoutSec: data.TimeoutSec,
-		MaxRounds: data.MaxRounds,
+		MaxRounds: data.MaxRounds, AutoTitles: &data.AutoTitles, TitleModel: data.TitleModel,
 	}
 	doc.Defaults.APIKey = ""
 	buf, err := json.MarshalIndent(doc, "", "  ")
@@ -838,6 +849,10 @@ func settingsToData(doc settingsDoc) StoreData {
 	data.RestoreLast = doc.RestoreLast
 	data.KeepLastRequest = doc.KeepLastRequest
 	data.TimeoutSec = doc.TimeoutSec
+	if doc.AutoTitles != nil {
+		data.AutoTitles = *doc.AutoTitles
+	}
+	data.TitleModel = doc.TitleModel
 	active := data.ActiveID
 	normalize(&data)
 	data.ActiveID = active

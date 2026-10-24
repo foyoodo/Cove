@@ -81,9 +81,12 @@ const (
 	motionModalOut    = 160 * time.Millisecond
 	motionSwitch      = 160 * time.Millisecond
 	// motionTheme matches the background crossfade. Both start on one clock.
-	motionTheme   = gradFade
-	motionTooltip = 100 * time.Millisecond
-	motionCopied  = 1500 * time.Millisecond
+	motionTheme     = gradFade
+	motionTooltip   = 100 * time.Millisecond
+	motionCopied    = 1500 * time.Millisecond
+	motionTitleFade = 200 * time.Millisecond
+	motionTitleSpin = 800 * time.Millisecond
+	motionTitleFail = 4 * time.Second
 
 	messageEnterY = 4
 	modalScale    = 0.98

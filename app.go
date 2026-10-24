@@ -314,6 +314,19 @@ type App struct {
 	// hScrollMsg is the message whose markdown is being built.
 	hScrolls   map[string]*hScrollSlot
 	hScrollMsg string
+
+	// Title generation. Jobs run off the frame. Fades and failures are
+	// drawn on the next frame. sideKeep holds sidebar rows that matched
+	// the current search so a new title does not drop them.
+	titleJobs   map[string]*titleJob
+	titleGens   map[string]int
+	titleFades  map[string]titleFade
+	titleFails  map[string]time.Time
+	windowTitle string
+	sideQuery   string
+	sideKeep    map[string]bool
+	sideClock   time.Time
+	previewMenu *previewMenu
 }
 
 // NewApp loads conversations from path. A missing file starts empty. A
@@ -348,6 +361,9 @@ func openApp(path string, keys keyring) *App {
 	a.assumeStoredKeys()
 	a.migrateSecrets()
 	a.adoptProviders()
+	if silenceAutoTitles {
+		a.data.AutoTitles = false
+	}
 	return a
 }
 
@@ -638,6 +654,7 @@ func (a *App) discardUntouchedExcept(keep string) {
 // persistForExit drops empty new chats and writes the file. Quit and
 // closing the window both use it, so an untouched chat is not left on disk.
 func (a *App) persistForExit() {
+	a.cancelAllTitles()
 	a.flushProviderEdits(time.Now())
 	a.cancelEdit()
 	a.nameKeptDrafts()
@@ -651,6 +668,9 @@ func (a *App) nameKeptDrafts() {
 	for i := range a.data.Conversations {
 		c := &a.data.Conversations[i]
 		if len(c.Messages) > 0 || strings.TrimSpace(c.Draft) == "" {
+			continue
+		}
+		if c.TitleSource == titleSourceManual {
 			continue
 		}
 		c.Title = draftTitle(c.Draft)
@@ -801,6 +821,7 @@ func (a *App) commitRename() {
 		title = newChatTitle
 	}
 	conv.Title = title
+	conv.TitleSource = titleSourceManual
 	a.touch(conv)
 	a.renameOpen = false
 	a.save()
@@ -826,6 +847,7 @@ func (a *App) askDelete() {
 }
 
 func (a *App) deleteConversation(id string) {
+	a.dropTitleState(id)
 	if a.isStreaming(id) {
 		a.stopChat(id)
 	}
@@ -1219,12 +1241,15 @@ func (a *App) send(text string) bool {
 	}
 	conv.SwitchNote = ""
 	a.addProviderNote = ""
-	if conv.Title == newChatTitle || strings.TrimSpace(conv.Title) == "" {
+	if conv.TitleSource != titleSourceManual && !hasUserMessage(conv) {
 		titleSrc := text
-		if titleSrc == "" && len(conv.DraftQuotes) > 0 {
+		if strings.TrimSpace(titleSrc) == "" && len(conv.DraftQuotes) > 0 {
 			titleSrc = conv.DraftQuotes[0].Text
 		}
-		conv.Title = titleFrom(titleSrc)
+		if title := temporaryTitle(titleSrc); title != newChatTitle {
+			conv.Title = title
+			conv.TitleSource = titleSourceTemp
+		}
 	}
 	quotes := append([]Quote(nil), conv.DraftQuotes...)
 	conv.DraftQuotes = nil
@@ -1288,6 +1313,7 @@ func (a *App) startReply(conv *Conversation) {
 		}
 		a.noteProviderAuth(convID, err)
 		a.saveSync()
+		a.maybeAutoTitle(convID)
 	}
 	if bodyErr != nil {
 		fail(bodyErr)
@@ -1459,6 +1485,7 @@ func (a *App) finishReply(convID, msgID string, gen int, text, thought string, e
 		}
 	}
 	a.saveSync()
+	a.maybeAutoTitle(convID)
 }
 
 // applyStream copies a batched delta onto the message when gen is still current.

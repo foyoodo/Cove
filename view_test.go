@@ -24,6 +24,9 @@ func newTestApp(t *testing.T) *App {
 	t.Helper()
 	a := openApp(t.TempDir()+"/conversations.json", newMemKeys())
 	a.instant = true
+	// Production defaults this on. Tests opt in so a finished reply does
+	// not also post a title request.
+	a.data.AutoTitles = false
 	return a
 }
 
