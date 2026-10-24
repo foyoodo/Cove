@@ -13,6 +13,7 @@ func (a *App) newSessionButton(c *ui.Context) ui.Element {
 	p := a.look
 	ok, why := a.sessionInsertWhy()
 	b := ui.ButtonBase(c).Size(24, 24).Radius(radiusRow).Center().Shrink(0).Label("New Session")
+	a.quietControl(b, radiusRow)
 	fg := p.TextSecondary
 	switch {
 	case !ok:
@@ -37,9 +38,7 @@ func (a *App) newSessionButton(c *ui.Context) ui.Element {
 	})
 	if b.Clicked() && ok {
 		a.InsertSessionBreak()
-		if a.composerField.Valid() {
-			a.composerField.Focus()
-		}
+		a.focusComposer()
 	}
 	a.sessionTip(c, b, why)
 	return b
@@ -244,6 +243,9 @@ func (a *App) maxContextControl(c *ui.Context, scope string, value int, set func
 					value = a.recalledLimit(scope)
 					set(value)
 					a.roundsFocus = scope
+					// The number field takes the keyboard. Restoring the
+					// pre-menu place would move it away on the same frame.
+					a.dropPendingFocusReturn()
 				case id == "Unlimited" && value > 0:
 					a.rememberLimit(scope, value)
 					a.roundsScope = ""

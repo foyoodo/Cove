@@ -393,10 +393,17 @@ func (t *Tester) SetDark(dark bool) {
 // SetPreferences changes the desktop's settings that controls follow, as
 // the user does in the system's settings.
 func (t *Tester) SetPreferences(p Preferences) {
-	t.h.prefs = platform.Preferences{Accent: platform.Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A}, ReduceMotion: p.ReduceMotion,
-		HighContrast: p.HighContrast, TextScale: float64(p.TextScale)}
+	t.StagePreferences(p)
 	t.rt.themeChanged()
 	t.settle()
+}
+
+// StagePreferences stores desktop settings without telling the view.
+// The next time the view re-reads them, as when its window becomes key,
+// Context.Preferences returns these. SetPreferences tells the view at once.
+func (t *Tester) StagePreferences(p Preferences) {
+	t.h.prefs = platform.Preferences{Accent: platform.Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A}, ReduceMotion: p.ReduceMotion,
+		HighContrast: p.HighContrast, FullKeyboardAccess: p.FullKeyboardAccess, TextScale: float64(p.TextScale)}
 }
 
 // SetLocale makes tag the language the app shows, as mygo.App.SetLocale
@@ -441,6 +448,32 @@ func (t *Tester) Image() *image.RGBA { return t.h.image() }
 func (t *Tester) Find(s string) (Rect, bool) {
 	for _, n := range t.rt.labels {
 		if n.text == s {
+			return n.r, true
+		}
+	}
+	return Rect{}, false
+}
+
+// FindAll returns every box labeled or showing s, in paint order.
+func (t *Tester) FindAll(s string) []Rect {
+	var out []Rect
+	for _, n := range t.rt.labels {
+		if n.text == s {
+			out = append(out, n.r)
+		}
+	}
+	return out
+}
+
+// FocusedRect is the box of the focused element labeled s. A label on a
+// parent does not match; Focused walks ancestors for that.
+func (t *Tester) FocusedRect(s string) (Rect, bool) {
+	id := t.rt.focused
+	if id == 0 {
+		return Rect{}, false
+	}
+	for _, n := range t.rt.labels {
+		if n.text == s && n.id == id {
 			return n.r, true
 		}
 	}

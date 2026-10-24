@@ -60,7 +60,7 @@ func (a *App) acknowledgementsSheet(c *ui.Context) {
 		return
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
-		a.acksOpen = false
+		a.closeAcksShown(true)
 		return
 	}
 	p := a.look
@@ -96,7 +96,7 @@ func (a *App) acknowledgementsSheet(c *ui.Context) {
 				})
 				ui.Row(c).Padding(12, 20, 16, 20).Justify(ui.End).BorderWidth(1, 0, 0, 0).BorderColor(p.SeparatorDefault).Children(func() {
 					if a.sheetButton(c, "Close", true).Clicked() {
-						a.acksOpen = false
+						a.closeAcks()
 					}
 				})
 			})

@@ -327,10 +327,12 @@ type node struct {
 	fit       Fit
 	gray      bool
 	// dismissed: Escape or a click outside closed the dialog or popover
-	// whose panel this is, in this frame (Dismissed).
-	dismissed bool
-	rotate    float32 // of an Icon, in degrees
-	label     string
+	// whose panel this is, in this frame (Dismissed). dismissedByKey is
+	// the Escape case, so a restore can follow the key rather than the click.
+	dismissed      bool
+	dismissedByKey bool
+	rotate         float32 // of an Icon, in degrees
+	label          string
 	// widget names the widget that used the element's state as it created
 	// it, which Key would then lose.
 	widget string

@@ -186,6 +186,13 @@ type Conversation struct {
 	// TitleGenerated is true once the one automatic title attempt has
 	// started, whether or not it produced a title. It is not cleared.
 	TitleGenerated bool `json:"-"`
+	// draftAnchor and draftCaret are this chat's composer selection, in
+	// runes. draftCaretDraft is the text those offsets belong to. They
+	// are not saved. Switching away and back restores them when the
+	// draft is still that text; a replaced draft puts the caret at the end.
+	draftAnchor, draftCaret int
+	draftCaretSet           bool
+	draftCaretDraft         string
 }
 
 // storeVersion is the schema written by this build. Older single-file

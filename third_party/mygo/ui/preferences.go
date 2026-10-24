@@ -18,6 +18,10 @@ type Preferences struct {
 	// default theme then draws borders and secondary text darker (lighter
 	// in the dark), and the focus ring opaque.
 	HighContrast bool
+	// FullKeyboardAccess is macOS's Full Keyboard Access. When it is off,
+	// Tab visits text fields and lists. When it is on, Tab visits every
+	// control. The headless default is off, matching macOS.
+	FullKeyboardAccess bool
 	// TextScale is how many times larger than usual text should be, as
 	// Windows's and GNOME's text size settings say, 1 for usual: the
 	// default theme's FontSize is that much larger.
@@ -33,10 +37,11 @@ func (rt *engine) preferences() Preferences {
 	if !rt.prefsKnown {
 		p := rt.host.preferences()
 		rt.prefs = Preferences{
-			Accent:       Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A},
-			ReduceMotion: p.ReduceMotion,
-			HighContrast: p.HighContrast,
-			TextScale:    float32(p.TextScale),
+			Accent:             Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A},
+			ReduceMotion:       p.ReduceMotion,
+			HighContrast:       p.HighContrast,
+			FullKeyboardAccess: p.FullKeyboardAccess,
+			TextScale:          float32(p.TextScale),
 		}
 		if rt.prefs.TextScale <= 0 {
 			rt.prefs.TextScale = 1

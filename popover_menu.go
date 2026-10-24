@@ -102,8 +102,12 @@ type popGeom struct {
 }
 
 type popoverState struct {
-	open           bool
-	wasOpen        bool
+	open    bool
+	wasOpen bool
+	// owner is the window that drew this popup. seen is the frame epoch
+	// of that draw. A popup that misses a frame releases its focus record.
+	owner          uintptr
+	seen           uint64
 	query          string
 	sig            string
 	hi             int
@@ -119,11 +123,13 @@ type popoverState struct {
 	typeAt         time.Time
 	focusComposer  bool
 	focusMoved     bool
-	activate       bool
-	closing        bool
-	animAt         time.Time
-	announced      bool
-	currentID      string
+	// pushed records that opening this menu took a focus snapshot.
+	pushed    bool
+	activate  bool
+	closing   bool
+	animAt    time.Time
+	announced bool
+	currentID string
 	// keyboardOpen is set when Space, Return, or Down on the focused
 	// anchor opens the menu. A pointer click leaves it false.
 	keyboardOpen bool
@@ -190,30 +196,59 @@ func (a *App) bindPopover(c *ui.Context, key string, anchor ui.Element, spec pop
 	if !st.open && (anchor.Clicked() || st.pendingKey) {
 		keyboard := st.pendingKey
 		st.pendingKey = false
+		// Only this window's menus. Closing another window's menu here
+		// would pop the ledger of the window that is key now and leave
+		// the owner's counter stuck.
 		for k, other := range a.popovers {
-			if k != key && other.open {
-				other.open = false
-				other.closing = false
+			if k == key || other == nil || !other.open {
+				continue
 			}
+			if other.owner != 0 && other.owner != a.windowToken {
+				continue
+			}
+			a.releasePopover(other, false)
+			other.open = false
+			other.closing = false
 		}
+		a.pushFocusReturn()
 		st.reset(c, keyboard)
+		st.pushed = true
+		a.notePopover(st)
+		// A pointer click does not leave a ring, and KeepFocus leaves the
+		// keyboard in the field underneath. The open menu still has to
+		// take letters and arrows. A keyboard open already focused the
+		// anchor with its ring, and a search field focuses itself next.
+		if !keyboard && !spec.Search {
+			anchor.Focus()
+			a.showFocusRing(c, false)
+		}
 	}
 	if st.open {
-		a.paintPopover(c, anchor, st, spec)
+		a.paintPopover(c, anchor, st, spec, key)
 	}
-	if st.focusMoved {
-		st.focusMoved = false
-		if st.focusComposer {
-			st.focusComposer = false
-			a.focusComposer()
-		} else if anchor.Valid() {
-			anchor.Focus()
-		}
+	// Settings menus are tab stops only with Full Keyboard Access. A click
+	// still opens the menu without moving the keyboard.
+	if a.buildingSettings {
+		a.quietControl(anchor, radiusRow)
+		a.noteSettingsStop(anchor, false)
 	}
 	st.wasOpen = st.open
 }
 
-func (a *App) dismissPopover(st *popoverState, now time.Time, composer bool) {
+func (a *App) releasePopover(st *popoverState, keyboard bool) {
+	if st == nil || !st.pushed {
+		return
+	}
+	st.pushed = false
+	if st.owner != 0 && st.owner != a.windowToken {
+		a.popOwnedLedger(st.owner, keyboard)
+		return
+	}
+	a.popFocusReturnShown(keyboard)
+}
+
+func (a *App) dismissPopover(st *popoverState, now time.Time, composer bool, keyboard bool) {
+	a.releasePopover(st, keyboard)
 	st.focusComposer = composer
 	if !st.focusMoved {
 		st.focusMoved = true
@@ -229,7 +264,14 @@ func (a *App) dismissPopover(st *popoverState, now time.Time, composer bool) {
 	}
 }
 
-func (a *App) commitPopover(st *popoverState, spec popSpec, id string) {
+func (a *App) commitPopover(st *popoverState, spec popSpec, id string, keyboard bool) {
+	a.releasePopover(st, keyboard)
+	// Choosing a composer chip's item returns to the composer. Settings
+	// and Add open another surface, which keeps the pre-menu place.
+	if spec.ComposerFocus && id != modelMenuSettings && id != modelMenuAdd {
+		a.abandonFocusReturn()
+		a.focusComposer()
+	}
 	st.focusComposer = spec.ComposerFocus
 	st.focusMoved = true
 	st.open = false
@@ -239,10 +281,11 @@ func (a *App) commitPopover(st *popoverState, spec popSpec, id string) {
 	}
 }
 
-func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, spec popSpec) {
+func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, spec popSpec, key string) {
+	a.notePopover(st)
 	w, h := c.Size()
 	if !appWindowFocused(c) || (st.winW > 0 && (w != st.winW || h != st.winH)) {
-		a.dismissPopover(st, c.Now(), false)
+		a.dismissPopover(st, c.Now(), false, false)
 		if !st.open {
 			return
 		}
@@ -299,7 +342,7 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 	if st.activate {
 		st.activate = false
 		if st.hi >= 0 && st.hi < len(combined) {
-			a.commitPopover(st, spec, combined[st.hi].ID)
+			a.commitPopover(st, spec, combined[st.hi].ID, true)
 			return
 		}
 	}
@@ -341,9 +384,14 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 	var searchEl ui.Element
 	var hotEl ui.Element
 	ui.Overlay(c, func() {
-		back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0)
+		// Keyed on this popover's own key, so two menus that share a name
+		// stay distinct. The key also stays put when a tooltip overlay
+		// appears or goes. A keyboard-opened menu shows the anchor's tip;
+		// the first press hides that tip, and an unkeyed backdrop would be
+		// a new element by the time the button comes up, dropping the click.
+		back := ui.Box(c.Key("menu-back-" + key)).Absolute().Left(0).Top(0).Right(0).Bottom(0)
 		if back.Clicked() {
-			a.dismissPopover(st, c.Now(), false)
+			a.dismissPopover(st, c.Now(), false, false)
 		}
 		a.popoverPointerMove(back, st, len(combined))
 		panel := ui.Column(c.Key(spec.Name + "-panel")).Absolute().Left(box.X).Top(box.Y).Width(box.W).Height(box.H).
@@ -480,7 +528,7 @@ func (a *App) popoverSearch(c *ui.Context, st *popoverState, spec popSpec) ui.El
 					st.query = ""
 					return true
 				}
-				a.dismissPopover(st, c.Now(), false)
+				a.dismissPopover(st, c.Now(), false, true)
 				return true
 			default:
 				// Home, End, and typed characters stay in the field.
@@ -531,7 +579,7 @@ func (a *App) popoverKeys(c *ui.Context, anchor ui.Element, st *popoverState, se
 		st.activate = true
 	}
 	if anchor.Shortcut(0, ui.KeyEscape) {
-		a.dismissPopover(st, c.Now(), false)
+		a.dismissPopover(st, c.Now(), false, true)
 	}
 	for k := ui.KeyA; k <= ui.KeyZ; k++ {
 		if !anchor.Shortcut(0, k) {
@@ -691,7 +739,7 @@ func (a *App) popItem(c *ui.Context, st *popoverState, spec popSpec, e popEntry,
 	if !e.Disabled {
 		row.Cursor(ui.CursorPointer)
 		if row.Clicked() {
-			a.commitPopover(st, spec, e.ID)
+			a.commitPopover(st, spec, e.ID, false)
 		}
 	}
 	row.Children(func() {

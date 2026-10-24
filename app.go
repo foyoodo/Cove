@@ -169,6 +169,8 @@ type App struct {
 	shotPinBreak         bool
 	newSessionItem       *mygo.MenuItem
 	composerField        ui.Element
+	composerElem         uint64
+	focusRT              ui.FocusToken
 	searchInput          ui.Element
 	roundsText           string
 	roundsScope          string
@@ -188,6 +190,8 @@ type App struct {
 	// while the window is key; with no record it goes to the end.
 	seenWindowFocus      bool
 	windowWasFocused     bool
+	seenSettingsFocus    bool
+	settingsWasFocused   bool
 	pendingActivate      bool
 	activateByClick      bool
 	activateKeep         int
@@ -195,18 +199,9 @@ type App struct {
 	composerAnchor       int
 	composerCaretPos     int
 	restoreComposerCaret bool
-	// restoreComposer and restoreSearch record who had the keyboard when a
-	// confirm dialog opened. Dismiss returns it there. A click in Search
-	// is not overwritten with the composer.
-	restoreComposer bool
-	restoreSearch   bool
 	// focusSearch asks the next build of the search field to take the
 	// keyboard. A dialog's Escape runs before that field is built.
 	focusSearch bool
-	// keyboardOwner is who had the keyboard at the end of the last frame:
-	// "search", "composer", "find", or empty. Shortcuts run before fields
-	// are built, so a dialog cannot ask the live element.
-	keyboardOwner string
 	// histSel is the transcript selection captured on the previous build.
 	// ⌘L reads it at the start of the next frame, before the list is rebuilt.
 	histSel HistorySelection
@@ -241,8 +236,68 @@ type App struct {
 	// glyph spans of that phrase into quotePhraseAt.
 	quotePhrase   string
 	quotePhraseAt []ui.Rect
-	// openedFocus is the one-time pass for a launch that lands on an empty draft.
+	// openedFocus is the one-time pass that lands launch on the composer.
 	openedFocus bool
+	// Focus restoration. See focus.go.
+	settled            focusPlace
+	returnTo           focusPlace
+	returnDepth        int
+	returnSurf         int
+	returnPending      bool
+	buildingSettings   bool
+	sideIndex          int
+	sideKeyFocus       bool
+	wantSidebarFocus   bool
+	wantSidebarRing    bool
+	focusNavID         string
+	wantSettingsRing   bool
+	settingsNav        ui.ListState
+	settingsNavIndex   int
+	settingsNavKey     bool
+	searchOrigin       focusPlace
+	searchOriginSet    bool
+	searchWas          bool
+	searchPick         string
+	searchPickRing     bool
+	searchQuerySeen    string
+	searchCancel       bool
+	findRestoreMessage bool
+	findSelElem        uint64
+	renameSelect       bool
+	fullKeyboard       bool
+	paintCtx           *ui.Context
+	ringID             uint64
+	ringSeen           uint64
+	ringAt             time.Time
+	tabChain           []tabHit
+	tabWant            uint64
+	tabSearch          ui.Element
+	tabList            ui.Element
+	tabComposer        ui.Element
+	tabFind            ui.Element
+	tabEdit            ui.Element
+	tabModel           ui.Element
+	tabEffort          ui.Element
+	tabSession         ui.Element
+	tabSend            ui.Element
+	tabRegen           ui.Element
+	tabMore            ui.Element
+	tabNewChat         ui.Element
+	tabSettings        ui.Element
+	tabQuotes          []ui.Element
+	tabMessages        []ui.Element
+	// ledgers keeps one focus record per window. Element ids from Settings
+	// are never compared with the main window's tree.
+	ledgers          map[uintptr]*focusLedger
+	cur              *focusLedger
+	windowToken      uintptr
+	settingsToken    uintptr
+	popupEpoch       uint64
+	closeKeyboard    bool
+	imeHandoff       bool
+	embeddedSettings bool
+	settingsChain    []tabHit
+	settingsTabBuf   []tabHit
 	// streamCaret draws the tide caret on the paragraph still being written.
 	streamCaret bool
 	// streamLines are the finished lines of the paragraph still being
@@ -661,7 +716,7 @@ func (a *App) discardUntouchedExcept(keep string) {
 func (a *App) persistForExit() {
 	a.cancelAllTitles()
 	a.flushProviderEdits(time.Now())
-	a.cancelEdit()
+	a.dropEdit()
 	a.nameKeptDrafts()
 	a.discardUntouchedExcept("")
 	a.writeSnapshot(true)
@@ -690,7 +745,7 @@ func (a *App) newChat() {
 		a.requestComposerFocus(conv.ID)
 		return
 	}
-	a.cancelEdit()
+	a.dropEdit()
 	a.nameKeptDrafts()
 	a.discardUntouchedExcept("")
 	now := time.Now()
@@ -709,27 +764,6 @@ func (a *App) newChat() {
 	a.notice = ""
 	a.save()
 	a.requestComposerFocus(conv.ID)
-}
-
-const (
-	focusOwnerSearch   = "search"
-	focusOwnerComposer = "composer"
-	focusOwnerFind     = "find"
-)
-
-// noteKeyboardOwner records who has the keyboard once the fields exist.
-// A shortcut on the next frame runs before those fields are built.
-func (a *App) noteKeyboardOwner() {
-	switch {
-	case a.searchInput.Valid() && a.searchInput.Focused():
-		a.keyboardOwner = focusOwnerSearch
-	case a.finder.open && a.finder.focused:
-		a.keyboardOwner = focusOwnerFind
-	case a.composerField.Valid() && a.composerField.Focused():
-		a.keyboardOwner = focusOwnerComposer
-	default:
-		a.keyboardOwner = ""
-	}
 }
 
 // focusComposer returns the keyboard to the bottom composer. Send, Stop,
@@ -778,42 +812,62 @@ func (a *App) blocksComposerFocus() bool {
 	return false
 }
 
+// selectChat opens id and moves the keyboard to its composer. A pointer
+// click on a sidebar row uses this. Keyboard ↑↓ uses activateChat with
+// focus false so the sidebar keeps the keyboard.
 func (a *App) selectChat(id string) {
+	a.activateChat(id, true)
+}
+
+func (a *App) activateChat(id string, toComposer bool) {
 	if a.conversation(id) == nil {
 		return
 	}
 	a.ensureChat(id)
-	conv := a.conversation(id)
-	if conv == nil {
+	if a.conversation(id) == nil {
 		return
 	}
 	if a.data.ActiveID == id {
-		// Clicking the draft row that is already selected is how you get
-		// back to the composer. A chat that has messages is left alone.
-		if len(conv.Messages) == 0 {
+		if toComposer {
 			a.requestComposerFocus(id)
 		}
 		return
 	}
-	a.cancelEdit()
+	a.rememberDraftCaret(a.active())
+	a.dropEdit()
 	a.nameKeptDrafts()
 	a.discardUntouchedExcept(id)
 	a.data.ActiveID = id
 	a.notice = ""
 	a.save()
-	if c := a.conversation(id); c != nil && len(c.Messages) == 0 {
+	if toComposer {
 		a.requestComposerFocus(id)
+		a.sayFocus(focusComposer, id)
 	}
 }
 
 func (a *App) beginRename() {
 	conv := a.active()
-	if conv == nil {
+	if conv == nil || a.renameOpen {
 		return
 	}
 	// A title that arrives after the field opens would replace the name
 	// the user is typing. Drop the in-flight request instead.
 	a.cancelTitle(conv.ID, false)
+	// Rename returns to the sidebar row when the keyboard was in the
+	// sidebar, and to the composer otherwise. A More menu or the search
+	// field in between does not become the restore target.
+	place := a.settled
+	if a.returnDepth > 0 && a.returnTo.kind == focusSidebar {
+		place = a.returnTo
+	}
+	if place.kind != focusSidebar {
+		place = focusPlace{kind: focusComposer, id: conv.ID}
+	}
+	a.abandonFocusReturn()
+	a.settled = place
+	a.pushFocusReturn()
+	a.renameSelect = true
 	a.renameText = conv.Title
 	a.renameOpen = true
 }
@@ -849,7 +903,15 @@ func (a *App) askDelete() {
 	}
 	// A chat with no messages, including a draft, goes away without a dialog.
 	if len(conv.Messages) == 0 {
+		fromSide := a.settled.kind == focusSidebar
+		ring := a.settled.visible
 		a.deleteConversation(conv.ID)
+		if fromSide && a.data.ActiveID != "" {
+			a.stayOnSidebar(ring)
+			return
+		}
+		a.abandonFocusReturn()
+		a.focusComposer()
 		return
 	}
 	a.beginConfirm(confirmDelete)
@@ -863,6 +925,10 @@ func (a *App) deleteConversation(id string) {
 	if a.edit.convID == id {
 		a.edit = messageEdit{}
 	}
+	nextID := ""
+	if a.data.ActiveID == id {
+		nextID = a.adjacentChatID(id)
+	}
 	next := make([]Conversation, 0, len(a.data.Conversations))
 	for _, c := range a.data.Conversations {
 		if c.ID != id {
@@ -874,10 +940,7 @@ func (a *App) deleteConversation(id string) {
 	}
 	a.data.Conversations = next
 	if a.data.ActiveID == id {
-		a.data.ActiveID = ""
-		if len(next) > 0 {
-			a.data.ActiveID = next[0].ID
-		}
+		a.data.ActiveID = nextID
 	}
 	a.confirmKind = ""
 	a.save()
@@ -909,6 +972,7 @@ func (a *App) openDefaults() {
 // Defaults. Each tab keeps its draft until Save or Cancel.
 func (a *App) openSettingsTab(tab int) {
 	if !a.modalOpen {
+		a.pushFocusReturn()
 		a.dropDrafts()
 	}
 	a.keyRefresh = true
@@ -1689,19 +1753,28 @@ func (a *App) editMessage(convID, msgID string) {
 	a.notice = ""
 }
 
-// cancelEdit closes the editor. The message and the composer draft are
-// the ones from before Edit.
+// cancelEdit closes the editor and returns the keyboard to the composer.
+// The message and the composer draft are the ones from before Edit.
 func (a *App) cancelEdit() {
+	if a.dropEdit() {
+		a.focusComposer()
+	}
+}
+
+// dropEdit closes the editor without moving the keyboard. selectChat,
+// new chat, and Find use it because they place the keyboard themselves.
+func (a *App) dropEdit() bool {
 	ed := a.edit
 	if ed.convID == "" {
-		return
+		return false
 	}
 	a.edit = messageEdit{}
 	conv := a.conversation(ed.convID)
 	if conv == nil {
-		return
+		return true
 	}
 	conv.Draft = ed.draft
+	return true
 }
 
 // laterCount is how many messages follow msgID.
@@ -1746,14 +1819,14 @@ func (a *App) applyEdit() {
 	conv := a.conversation(a.edit.convID)
 	if conv == nil {
 		a.edit = messageEdit{}
-		a.confirmKind = ""
+		a.releaseConfirmRecord()
 		return
 	}
 	text := strings.TrimSpace(a.edit.text)
 	msgID := a.edit.msgID
 	quotes := append([]Quote(nil), a.edit.quotes...)
 	a.edit = messageEdit{}
-	a.confirmKind = ""
+	a.releaseConfirmRecord()
 	if text == "" && len(quotes) == 0 {
 		return
 	}

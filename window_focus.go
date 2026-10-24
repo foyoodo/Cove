@@ -2,7 +2,6 @@ package main
 
 import (
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -12,19 +11,8 @@ import (
 // window becomes key (NSWindowDidBecomeKeyNotification): ⌘Tab back to
 // Cove, activating the app, or a Dock click that makes the main window
 // key. The Settings window is a different surface and does not share it.
-//
-//go:linkname contextRuntime github.com/egoist/mygo/ui.(*Context).runtime
-func contextRuntime(c *ui.Context) unsafe.Pointer
-
-//go:linkname engineWindowFocus github.com/egoist/mygo/ui.(*engine).windowFocus
-func engineWindowFocus(rt unsafe.Pointer) bool
-
 func appWindowFocused(c *ui.Context) bool {
-	rt := contextRuntime(c)
-	if rt == nil {
-		return true
-	}
-	return engineWindowFocus(rt)
+	return c.FocusToken().WindowFocused()
 }
 
 const (
@@ -49,6 +37,9 @@ func (a *App) trackWindowFocus(c *ui.Context) {
 	}
 	if !focused && a.windowWasFocused {
 		a.rememberActivateFocus()
+		// A native menu closes when its window resigns key. The other
+		// window becoming key is that edge.
+		a.closeMenusOnResign()
 	}
 	if focused && !a.windowWasFocused {
 		a.applyWindowActivate()
@@ -57,6 +48,21 @@ func (a *App) trackWindowFocus(c *ui.Context) {
 		a.pendingActivate = false
 	}
 	a.windowWasFocused = focused
+}
+
+// trackSettingsFocus closes the Settings window's menus when it resigns
+// key. The main window's tracker does not see that surface.
+func (a *App) trackSettingsFocus(c *ui.Context) {
+	focused := appWindowFocused(c)
+	if !a.seenSettingsFocus {
+		a.seenSettingsFocus = true
+		a.settingsWasFocused = focused
+		return
+	}
+	if !focused && a.settingsWasFocused {
+		a.closeMenusOnResign()
+	}
+	a.settingsWasFocused = focused
 }
 
 // rememberActivateFocus snapshots the editing surface that should keep
@@ -110,6 +116,10 @@ func (a *App) noteComposerCaret() {
 	anchor, caret := a.composerField.TextAnchorCaret()
 	a.composerAnchor, a.composerCaretPos = anchor, caret
 	a.composerCaretSet = true
+	if conv := a.active(); conv != nil {
+		conv.draftAnchor, conv.draftCaret, conv.draftCaretSet = anchor, caret, true
+		conv.draftCaretDraft = conv.Draft
+	}
 }
 
 func composerEnd(draft string) (int, int) {

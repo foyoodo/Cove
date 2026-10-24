@@ -64,6 +64,20 @@ type sideRow struct {
 func (a *App) view(c *ui.Context) {
 	a.inRender = true
 	defer func() { a.inRender = false }()
+	a.paintCtx = c
+	a.resetTabTargets()
+	a.resetSettingsTabs()
+	a.fullKeyboard = c.Preferences().FullKeyboardAccess
+	embedded := a.settingsOpen && a.prefs == nil
+	if a.embeddedSettings && !embedded {
+		a.dropSettingsWindow()
+	}
+	a.embeddedSettings = embedded
+	a.bindLedger(c, embedded)
+	// The fade reads the ledger beginRings just snapshotted. Binding
+	// first keeps a window switch from fading the other window's ring.
+	a.beginRings()
+	a.bindSelectionHandoff(c)
 	// modelMenuSeen is set by the composer menu while its popup is open.
 	// A pass that builds no open menu drops the chat recorded for it, so
 	// the next chat's checks cannot inherit the previous one. Early
@@ -122,29 +136,35 @@ func (a *App) view(c *ui.Context) {
 		a.statesBoard(c)
 		a.veilScrollbar(c)
 		a.finishQuotePointer()
+		a.sweepPopovers()
+		a.storeLedger()
 		return
 	}
 	if a.shotPalette {
 		a.paletteBoard(c)
 		a.veilScrollbar(c)
 		a.finishQuotePointer()
+		a.sweepPopovers()
+		a.storeLedger()
 		return
 	}
 	winW, _ := c.Size()
 	if a.settingsOpen && a.prefs == nil {
+		a.buildingSettings = true
 		a.settingsBody(c)
 		a.confirmDialog(c)
+		a.buildingSettings = false
 		a.veilScrollbar(c)
 		a.settleComposerFocus()
 		a.finishQuotePointer()
+		a.finishSettingsTabs()
+		a.endFocusFrame(c, focusSurfSettings)
 		return
 	}
 	if !a.openedFocus {
 		a.openedFocus = true
 		if conv := a.active(); conv != nil {
 			a.ensureChat(conv.ID)
-		}
-		if conv := a.active(); untouched(conv) {
 			a.requestComposerFocus(conv.ID)
 		}
 	}
@@ -168,7 +188,8 @@ func (a *App) view(c *ui.Context) {
 	a.confirmDialog(c)
 	a.requestModal(c)
 	a.veilScrollbar(c)
-	a.noteKeyboardOwner()
+	a.assembleTabs()
+	a.endFocusFrame(c, focusSurfMain)
 	a.noteComposerCaret()
 	// A request the composer did not take (no field, or a sheet opened
 	// over it in this frame) does not fire on a later frame.
@@ -202,26 +223,24 @@ func (a *App) shortcuts(c *ui.Context) {
 	a.finder.enterHandled = false
 	if a.acksOpen {
 		if c.Shortcut(0, ui.KeyEscape) {
-			a.acksOpen = false
+			a.closeAcksShown(true)
 		}
 		return
 	}
 	if a.confirmKind != "" {
 		if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(0, ui.KeyEnter) {
-			a.dismissConfirm()
+			a.dismissConfirm(true)
 			a.suppressEditEscape = true
 		}
 		if c.Shortcut(ui.Cmd, ui.KeyBackspace) {
-			a.acceptConfirm()
+			a.acceptConfirm(true)
 		}
 		return
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyN) {
 		if a.CanInsertBreak() {
 			a.InsertSessionBreak()
-			if a.composerField.Valid() {
-				a.composerField.Focus()
-			}
+			a.focusComposer()
 		}
 	} else if c.Shortcut(ui.Cmd, ui.KeyN) {
 		a.newChat()
@@ -245,7 +264,7 @@ func (a *App) shortcuts(c *ui.Context) {
 			a.findStep(1, c.Now())
 		}
 		if c.Shortcut(0, ui.KeyEscape) {
-			a.closeFind()
+			a.closeFindShown(true)
 			a.suppressEditEscape = true
 		}
 	}
@@ -285,6 +304,37 @@ func (a *App) shortcuts(c *ui.Context) {
 		a.cancelEdit()
 		a.suppressEditEscape = true
 	}
+	// A later Esc, with the quote bar already closed, leaves a message
+	// selection for the composer. The bar's own Esc keeps the selection.
+	if !a.quoteBarOpen && a.edit.convID == "" && !a.finder.open && a.confirmKind == "" &&
+		a.settled.kind == focusMessage && c.Shortcut(0, ui.KeyEscape) {
+		a.focusComposer()
+	}
+	// A popup keeps Tab. Moving focus out from under an open menu leaves
+	// it up, and Escape can no longer close it.
+	if a.popupOpen() {
+		c.Shortcut(0, ui.KeyTab)
+		c.Shortcut(ui.Shift, ui.KeyTab)
+		return
+	}
+	settingsHere := a.settingsOpen && a.prefs == nil
+	if !a.renameOpen && !a.modalOpen && !a.requestOpen && !a.acksOpen && (settingsHere || !a.settingsOpen) {
+		if settingsHere {
+			if c.Shortcut(0, ui.KeyTab) {
+				a.focusSettingsTab(c, false)
+			}
+			if c.Shortcut(ui.Shift, ui.KeyTab) {
+				a.focusSettingsTab(c, true)
+			}
+			return
+		}
+		if c.Shortcut(0, ui.KeyTab) {
+			a.focusTab(c, false)
+		}
+		if c.Shortcut(ui.Shift, ui.KeyTab) {
+			a.focusTab(c, true)
+		}
+	}
 }
 
 func (a *App) sidebar(c *ui.Context) {
@@ -319,20 +369,28 @@ func (a *App) sidebar(c *ui.Context) {
 		a.side.Header = func(i int) bool {
 			return i >= 0 && i < len(a.sideRows) && a.sideRows[i].header != ""
 		}
-		ui.List(c, &a.side, len(rows), func(i int) {
+		a.syncSideIndex()
+		a.side.Selected = &a.sideIndex
+		a.side.QuietSelection = true
+		list := ui.List(c, &a.side, len(rows), func(i int) {
 			if i < 0 || i >= len(a.sideRows) {
 				return
 			}
 			a.sidebarRow(c, a.sideRows[i])
-		}).Grow(1).Padding(0, 10, 8, 10).Gap(1).Children(func() {
+		}).Grow(1).Padding(0, 10, 8, 10).Gap(1).FocusRing(false).Label("Chats")
+		list.Children(func() {
 			if len(a.data.Conversations) == 0 {
 				ui.Text(c, "No chats yet").TextColor(p.TextSecondary).Padding(space3, space2)
 			} else if len(a.sideRows) == 0 {
 				ui.Text(c, "No matching chats").TextColor(p.TextSecondary).Padding(space3, space2)
 			}
 		})
+		a.finishSidebarList(c, list)
 		ui.Column(c).Padding(6, 10, 10, 10).Children(func() {
 			gear := ui.ButtonBase(c).Height(rowHeight).FillWidth().Gap(8).Padding(0, 10).Radius(radiusRow).AlignItems(ui.Center).Label("Settings").Cursor(ui.CursorPointer)
+			a.quietControl(gear, radiusRow)
+			a.tabSettings = gear
+			a.takeTab(c, gear)
 			if gear.Hovered() {
 				gear.Background(p.FillHover)
 			}
@@ -412,12 +470,21 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 	id := conv.ID
 	selected := id == a.data.ActiveID
 	line := ui.Row(c).Height(rowHeight).FillWidth().Gap(space2).Padding(0, space2).Radius(radiusRow).AlignItems(ui.Center)
+	searching := a.searchInput.Valid() && a.searchInput.Focused() && id == a.searchPick && !selected
 	switch {
 	case selected:
 		line.Background(p.SelectionRow)
-	case line.Hovered():
+	case searching || line.Hovered():
 		line.Background(p.FillHover)
 	}
+	line.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+		switch {
+		case selected && a.sideKeyFocus:
+			a.strokeInset(painter, r, radiusRow, line.ID())
+		case searching && a.searchPickRing:
+			a.strokeInset(painter, r, radiusRow, line.ID())
+		}
+	})
 	// While a theme switch is running, suppressFade is set and this hover
 	// transition stays off, so the row tracks the same mix as the preview
 	// instead of chasing it on the 120ms hover clock.
@@ -430,7 +497,7 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 	line.Cursor(ui.CursorPointer)
 	line.ContextMenu(func(m *ui.Menu) {
 		if m.Item("Rename").Chosen() {
-			a.selectChat(id)
+			a.activateChat(id, false)
 			a.beginRename()
 		}
 		regen := m.Item(titleRegenLabel)
@@ -439,12 +506,16 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 		}
 		if regen.Chosen() {
 			// Another chat stays in the sidebar only. The open chat greys
-			// its title bar in the same frame as its row.
+			// its title bar in the same frame as its row, and the keyboard
+			// stays where it was.
+			if id == a.data.ActiveID {
+				a.activateChat(id, false)
+			}
 			a.regenerateTitle(id, id == a.data.ActiveID)
 		}
 		m.Separator()
 		if m.Item("Delete").Chosen() {
-			a.selectChat(id)
+			a.activateChat(id, false)
 			a.askDelete()
 		}
 	})
@@ -762,6 +833,8 @@ func (a *App) sidebarTitle(c *ui.Context) {
 	ui.Row(c).Height(titleBarHeight).FillWidth().Padding(0, 10).AlignItems(ui.Center).DragWindow().Children(func() {
 		ui.Spacer(c)
 		btn := a.iconButtonSize(c, "new-chat", newChatTitle, iconCompose, iconHit)
+		a.tabNewChat = btn
+		a.takeTab(c, btn)
 		a.tip(c, btn, newChatTitle+" (⌘N)")
 		if btn.Clicked() {
 			a.newChat()
@@ -814,6 +887,8 @@ func (a *App) titleBar(c *ui.Context, conv *Conversation) {
 			})
 		})
 		regen := a.iconButton(c, "toolbar-regen", "Regenerate", iconRefresh).Disabled(!a.canRegenerate())
+		a.tabRegen = regen
+		a.takeTab(c, regen)
 		if !a.canRegenerate() {
 			regen.Opacity(0.4)
 		}
@@ -821,6 +896,8 @@ func (a *App) titleBar(c *ui.Context, conv *Conversation) {
 			a.regenerate()
 		}
 		more := a.iconButton(c, "toolbar-more", "More", iconEllipsis)
+		a.tabMore = more
+		a.takeTab(c, more)
 		a.moreMenu(c, more)
 	})
 }
@@ -832,6 +909,7 @@ func (a *App) iconButton(c *ui.Context, key, label string, glyph *ui.SVG) ui.Ele
 func (a *App) iconButtonSize(c *ui.Context, key, label string, glyph *ui.SVG, size float32) ui.Element {
 	p := a.look
 	b := ui.ButtonBase(c.Key(key)).Size(size, size).Radius(radiusRow).Center().Label(label).Cursor(ui.CursorPointer)
+	a.quietControl(b, radiusRow)
 	switch {
 	case b.Pressed():
 		b.Background(p.FillPressed)
@@ -907,12 +985,15 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 				a.beginRename()
 			case "retitle":
 				if conv := a.active(); conv != nil {
+					// The menu's own close restores the pre-open place.
+					// Regenerating must not send the keyboard to the composer.
+					a.activateChat(conv.ID, false)
 					a.regenerateTitle(conv.ID, true)
 				}
 			case "delete":
 				a.askDelete()
 			case "request":
-				a.requestOpen = true
+				a.openRequest()
 			}
 		},
 	})
@@ -985,6 +1066,11 @@ func (a *App) modelMenu(c *ui.Context, conv *Conversation, slot string) ui.Eleme
 	if model == "No model" {
 		dot = ui.Color{}
 	}
+	if slot == "composer" {
+		a.tabModel = b
+		a.takeTab(c, b)
+	}
+	a.quietControl(b, radiusRow)
 	b.Label("Model " + label)
 	b.Children(func() {
 		if dot.A > 0 {
@@ -1349,22 +1435,24 @@ func (a *App) userMessage(c *ui.Context, conv *Conversation, m *Message) {
 		row := ui.Row(c).Gap(2).AlignItems(ui.End).FillWidth().Justify(ui.End)
 		hovered := row.Hovered()
 		row.Children(func() {
-			acts := ui.Row(c).Gap(0).AlignItems(ui.Center).Shrink(0)
-			if !hovered {
-				acts.Opacity(0)
-			} else if !a.instant && !a.reduceMotion {
-				acts.Transition(ui.ElementTransition{Colors: true, Duration: motionActions, Ease: easeStandard})
-			}
+			acts := ui.Row(c.Key("user-acts-" + m.ID)).Gap(0).AlignItems(ui.Center).Shrink(0)
 			acts.Children(func() {
 				if m.Content != "" {
 					a.copyButton(c, m.ID, m.Content, iconSm)
 				}
 				btn := a.iconButtonSize(c, "edit-"+m.ID, "Edit", iconPencil, iconSm)
+				a.noteMessageTab(btn)
+				a.takeTab(c, btn)
 				a.tip(c, btn, "Edit this message")
 				if btn.Clicked() {
 					a.editMessage(conv.ID, m.ID)
 				}
 			})
+			if !hovered && !acts.FocusWithin() {
+				acts.Opacity(0)
+			} else if hovered && !a.instant && !a.reduceMotion {
+				acts.Transition(ui.ElementTransition{Colors: true, Duration: motionActions, Ease: easeStandard})
+			}
 			a.userBubbleText(c, m)
 		})
 	})
@@ -1527,7 +1615,10 @@ func (a *App) thinkingBlock(c *ui.Context, m *Message, live bool) {
 	ui.Column(c).AlignItems(ui.Start).Children(func() {
 		parts := ui.CollapsibleBase(c, &m.ReasoningOpen)
 		a.noteThinking(m.ID, m.ReasoningOpen, parts.Progress())
-		tr := parts.Trigger.Gap(6).Height(26).AlignItems(ui.Center).AlignSelf(ui.Start)
+		tr := parts.Trigger.Gap(6).Height(26).AlignItems(ui.Center).AlignSelf(ui.Start).Label(label)
+		a.quietControl(tr, radiusRow)
+		a.noteMessageTab(tr)
+		a.takeTab(c, tr)
 		labelColor := p.TextSecondary
 		if live || tr.Hovered() {
 			labelColor = p.TextPrimary
@@ -1557,17 +1648,15 @@ func (a *App) thinkingBlock(c *ui.Context, m *Message, live bool) {
 
 func (a *App) messageActions(c *ui.Context, conv *Conversation, m *Message, show bool) {
 	p := a.look
-	row := ui.Row(c).Gap(0).AlignItems(ui.Center).Margin(2, 0, 0, 0).Unselectable()
-	if !show {
-		// Stay in the tree so tests can still click Copy and Regenerate.
-		row.Opacity(0)
-	}
+	row := ui.Row(c.Key("msg-acts-"+m.ID)).Gap(0).AlignItems(ui.Center).Margin(2, 0, 0, 0).Unselectable()
 	row.Children(func() {
 		if m.Content != "" {
 			a.copyButton(c, m.ID, m.Content, iconSm)
 		}
 		if m.Role == roleAssistant && isLastMessage(conv, m.ID) {
 			btn := a.iconButtonSize(c, "regen-"+m.ID, "Regenerate", iconRefresh, iconSm)
+			a.noteMessageTab(btn)
+			a.takeTab(c, btn)
 			btn.Disabled(!a.canRegenerate())
 			a.tip(c, btn, "Regenerate")
 			if btn.Clicked() {
@@ -1586,6 +1675,11 @@ func (a *App) messageActions(c *ui.Context, conv *Conversation, m *Message, show
 			}
 		}
 	})
+	if !show && !row.FocusWithin() {
+		// Stay in the tree so tests can still click Copy and Regenerate.
+		// A keyboard focus inside the row keeps the actions visible.
+		row.Opacity(0)
+	}
 }
 
 func latestUserID(conv *Conversation) string {
@@ -1617,6 +1711,7 @@ func (a *App) copyButton(c *ui.Context, id, text string, size float32) ui.Elemen
 	var btn ui.Element
 	if label == "Copied" {
 		btn = ui.ButtonBase(c.Key("copy-"+id)).Height(size).Padding(0, 4).AlignItems(ui.Center).Label("Copied")
+		a.quietControl(btn, radiusRow)
 		btn.Children(func() {
 			controlText(c, "Copied", 12, 0, 500, color)
 		})
@@ -1625,6 +1720,8 @@ func (a *App) copyButton(c *ui.Context, id, text string, size float32) ui.Elemen
 		btn = a.iconButtonSize(c, "copy-"+id, "Copy", iconCopy, size)
 		a.tip(c, btn, "Copy markdown")
 	}
+	a.noteMessageTab(btn)
+	a.takeTab(c, btn)
 	if btn.Clicked() {
 		c.WriteClipboard(text)
 		a.copied[id] = c.Now().Add(motionCopied)
@@ -1639,25 +1736,37 @@ func (a *App) searchField(c *ui.Context) {
 		ui.Icon(c, iconSearch).Size(14, 14).TextColor(p.TextSecondary).Shrink(0)
 		field := ui.TextInputBase(c.Key("sidebar-search"), &a.query).Placeholder("Search").Label("Search").Grow(1).MinWidth(0).FontSize(13)
 		a.searchInput = field
+		a.tabSearch = field
+		a.noteSearchQuery()
 		// No fill and no border: fill/quaternary is translucent, so painting
 		// it again on the input draws a second rectangle that ends before ⌘K.
 		// The placeholder uses text/secondary, which is Theme.TextMuted.
 		field.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
 		field.OnTextKey(func(k ui.TextKey) bool {
-			// Same as the composer: ⌘⌫ is Delete Chat, not delete-to-start.
-			if k.Key == ui.KeyBackspace && k.Mods == ui.Cmd {
-				a.askDelete()
-				return true
-			}
-			return false
+			return a.onSearchKey(k)
 		})
+		if field.Shortcut(0, ui.KeyUp) {
+			a.moveSearch(-1)
+		}
+		if field.Shortcut(0, ui.KeyDown) {
+			a.enterSearchList()
+		}
+		// Escape is handled in OnTextKey so SetText clears the editor
+		// buffer. A shortcut here would claim the key and skip that.
 		if a.focusSearch || c.Shortcut(ui.Cmd, ui.KeyK) {
 			field.Focus()
 			a.focusSearch = false
 		}
+		a.takeTab(c, field)
+		a.searchPickRing = field.FocusVisible()
 		if field.Focused() {
-			row.Border(1, p.AccentDefault).Shadow(0, 0, 0, 3, p.AccentRing)
+			row.Border(1, p.AccentDefault)
 		}
+		row.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			if field.Focused() {
+				a.strokeOuter(p, r, radiusRow, row.ID())
+			}
+		})
 		controlLine(c, "⌘K", 11, 0, 400, p.TextSecondary).Shrink(0)
 	})
 }
@@ -1853,26 +1962,32 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 						// stays, faded, and does not take keys.
 						input.Padding(0).MinHeight(21).Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
 						a.composerField = input
+						a.composerElem = input.ID()
 						if input.Pressed() {
 							a.quoteBarOpen = false
 						}
-						if editing {
+						switch {
+						case editing:
 							input.Disabled(true)
-						} else if a.focusComposerID == conv.ID {
+						case a.imeHandoff && conv.ID == a.data.ActiveID:
+							// The key that moved focus here is already with the
+							// input method. Focusing again, or placing the caret,
+							// would commit or drop that composition.
+							a.imeHandoff = false
+							if a.focusComposerID == conv.ID {
+								a.focusComposerID = ""
+							}
+						case a.focusComposerID == conv.ID || (a.tabWant != 0 && input.ID() == a.tabWant):
 							// One frame. Calling Focus every frame would pin the caret
 							// here and the user could not tab away.
 							input.Focus()
-							if a.restoreComposerCaret {
-								a.restoreComposerCaret = false
-								if a.composerCaretSet {
-									input.SetTextSelection(a.composerAnchor, a.composerCaretPos)
-								} else {
-									end, _ := composerEnd(conv.Draft)
-									input.SetTextSelection(end, end)
-								}
+							a.placeDraftCaret(input, conv)
+							if a.focusComposerID == conv.ID {
+								a.focusComposerID = ""
 							}
-							a.focusComposerID = ""
+							a.takeTab(c, input)
 						}
+						a.tabComposer = input
 						paintPlaceholder(c, input, p.TextTertiary)
 						input.OnTextKey(func(k ui.TextKey) bool {
 							if editing {
@@ -1917,8 +2032,16 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 						// this row 2pt tall and the single-line border box 75.
 						ui.Row(c).FillWidth().Height(composerToolH).Gap(4).AlignItems(ui.Center).Children(func() {
 							a.tip(c, a.modelMenu(c, conv, "composer"), "Model").MinWidth(0)
-							a.effortMenu(c, conv, "composer").Shrink(0)
-							a.newSessionButton(c)
+							effort := a.effortMenu(c, conv, "composer").Shrink(0)
+							// An unsupported chip stays enabled so its hover
+							// tip can show. It is not a Tab stop.
+							if !reasoningUnsupported(conv.Config) {
+								a.tabEffort = effort
+								a.takeTab(c, effort)
+							}
+							session := a.newSessionButton(c)
+							a.tabSession = session
+							a.takeTab(c, session)
 							ui.Spacer(c)
 							if a.cardContentWidth(c) >= 560 {
 								hint := "↵ send · ⇧↵ newline"
@@ -1931,11 +2054,19 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 								controlLine(c, hint, 11, 13, 400, p.TextTertiary).Padding(0, 8, 0, 0).Ellipsis("…").MinWidth(0)
 							}
 							if streamingHere {
-								if a.roundButton(c, "Stop", iconStop, false, editing).Clicked() && !editing {
+								stop := a.roundButton(c, "Stop", iconStop, false, editing)
+								a.tabSend = stop
+								a.takeTab(c, stop)
+								if stop.Clicked() && !editing {
 									a.stop()
 								}
-							} else if a.roundButton(c, "Send", iconSend, true, editing || (strings.TrimSpace(conv.Draft) == "" && len(conv.DraftQuotes) == 0)).Clicked() && !editing {
-								a.send(conv.Draft)
+							} else {
+								send := a.roundButton(c, "Send", iconSend, true, editing || (strings.TrimSpace(conv.Draft) == "" && len(conv.DraftQuotes) == 0))
+								a.tabSend = send
+								a.takeTab(c, send)
+								if send.Clicked() && !editing {
+									a.send(conv.Draft)
+								}
 							}
 						})
 					})
@@ -2028,6 +2159,8 @@ func (a *App) inlineEditor(c *ui.Context, conv *Conversation) {
 					MinHeight(0).
 					AutoFocus()
 				input.Padding(0).MinHeight(21).Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
+				a.tabEdit = input
+				a.takeTab(c, input)
 				paintPlaceholder(c, input, p.TextTertiary)
 				input.OnTextKey(func(k ui.TextKey) bool {
 					if k.Key == ui.KeyBackspace && k.Mods == ui.Cmd {
@@ -2102,10 +2235,11 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation, slot string) ui.Elem
 	// Plain chip: sparkle and the effort word, no control fill. The
 	// accessible name still says Reasoning so the menu is findable.
 	b := ui.ButtonBase(c.Key("effort-menu-"+slot)).Height(chipH).Gap(5).Padding(0, 5, 0, 7).Radius(radiusRow).Label("Reasoning: " + word).Cursor(ui.CursorPointer)
+	a.quietControl(b, radiusRow)
 	fg := p.TextSecondary
 	switch {
 	case unsupported:
-		b.Opacity(0.45)
+		b.Opacity(0.45).Cursor(ui.CursorDefault)
 	case b.Pressed():
 		b.Background(p.FillPressed)
 		fg = p.TextPrimary
@@ -2163,7 +2297,8 @@ func (a *App) roundButton(c *ui.Context, label string, glyph *ui.SVG, primary, d
 	p := a.look
 	// KeepFocus: a click must not move first responder off the text view.
 	// pointerDown (ui/input.go) would otherwise focus this button.
-	b := ui.ButtonBase(c).Size(sendSize, sendSize).Radius(sendSize / 2).Center().Label(label).Disabled(disabled).Cursor(ui.CursorPointer).KeepFocus()
+	b := ui.ButtonBase(c.Key("round-"+label)).Size(sendSize, sendSize).Radius(sendSize / 2).Center().Label(label).Disabled(disabled).Cursor(ui.CursorPointer).KeepFocus()
+	a.keyboardRingOnly(b, sendSize/2)
 	bg, fg := p.TextPrimary, p.StopGlyph
 	if primary {
 		bg, fg = p.ButtonPrimaryBg, p.ButtonPrimaryText
@@ -2185,11 +2320,19 @@ func (a *App) roundButton(c *ui.Context, label string, glyph *ui.SVG, primary, d
 }
 
 func (a *App) renameModal(c *ui.Context) {
-	ui.Modal(c, &a.renameOpen, func() {
+	wasOpen := a.renameOpen
+	keyClose := false
+	panel := ui.Modal(c, &a.renameOpen, func() {
 		ui.Column(c).Width(380).Gap(12).Children(func() {
 			ui.Text(c, "Rename chat").FontSize(18).Bold()
-			in := ui.TextInput(c, &a.renameText).Label("Name").AutoFocus()
+			in := ui.TextInput(c, &a.renameText).Label("Name").AutoFocus().FocusRing(false)
+			if a.renameSelect && in.Focused() {
+				in.SetTextSelection(0, len([]rune(a.renameText)))
+				a.renameSelect = false
+			}
+			a.fieldRing(in, radiusRow)
 			if in.Submitted() {
+				keyClose = true
 				a.commitRename()
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
@@ -2202,10 +2345,17 @@ func (a *App) renameModal(c *ui.Context) {
 			})
 		})
 	})
+	if wasOpen && !a.renameOpen {
+		if panel.Valid() && panel.DismissedByKey() {
+			keyClose = true
+		}
+		a.popFocusReturnShown(keyClose)
+	}
 }
 
 func (a *App) settingsModal(c *ui.Context) {
 	wasOpen := a.modalOpen
+	keyClose := false
 	p := a.look
 	_, winH := c.Size()
 	maxH := winH - 96
@@ -2215,7 +2365,7 @@ func (a *App) settingsModal(c *ui.Context) {
 	if maxH < 280 {
 		maxH = 280
 	}
-	ui.DialogBase(c, &a.modalOpen, func(back, panel ui.Element) {
+	panel := ui.DialogBase(c, &a.modalOpen, func(back, panel ui.Element) {
 		back.Background(p.LayerScrim)
 		back.Justify(ui.Start).AlignItems(ui.Center).Padding(64, 20, 16, 20)
 		panel.Padding(0).Gap(0).Width(560).MaxHeight(maxH).Radius(radiusComposer).Background(p.LayerSheet).Border(0.5, p.LayerOverlayBorder).Clip()
@@ -2258,6 +2408,10 @@ func (a *App) settingsModal(c *ui.Context) {
 	})
 	if wasOpen && !a.modalOpen {
 		a.dropDrafts()
+		if panel.Valid() && panel.DismissedByKey() {
+			keyClose = true
+		}
+		a.popFocusReturnShown(keyClose)
 	}
 }
 
@@ -2290,6 +2444,8 @@ func (a *App) sheetButton(c *ui.Context, label string, primary bool) ui.Element 
 	b.Children(func() {
 		controlText(c, label, 13, 0, weight, fg)
 	})
+	a.keyboardRingOnly(b, radiusRow)
+	a.noteSettingsStop(b, false)
 	return b
 }
 
@@ -2362,7 +2518,8 @@ func (a *App) configForm(c *ui.Context) {
 			if !a.formTempOn {
 				val.Opacity(0.4)
 			}
-			sw := ui.Switch(c, &a.formTempOn).Label("Send temperature").Size(32, 18)
+			sw := ui.Switch(c, &a.formTempOn).Label("Send temperature")
+			a.switchRing(sw)
 			if !p.Focused {
 				sw.Opacity(0.72)
 			}
@@ -2404,6 +2561,7 @@ func (a *App) configForm(c *ui.Context) {
 					})
 				}
 			})
+			a.segmentedRing(track)
 			*el = track
 			if reasoningUnsupported(hintCfg) {
 				track.Disabled(true)
@@ -2526,7 +2684,7 @@ func (a *App) settingsLineColor(c *ui.Context, label, hint string, hintColor ui.
 			var el ui.Element
 			// The label sits on the row's leading edge. A growing button
 			// centers its text by default, which reads as a form.
-			lab := ui.ButtonBase(c).Grow(1).MinWidth(0).MinHeight(20).Padding(0).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorDefault)
+			lab := ui.ButtonBase(c).Grow(1).MinWidth(0).MinHeight(20).Padding(0).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorDefault).OmitTab()
 			if top {
 				lab.AlignItems(ui.Start).Padding(3, 0, 0, 0)
 			}
@@ -2557,7 +2715,9 @@ func (a *App) settingsLineColor(c *ui.Context, label, hint string, hintColor ui.
 
 func (a *App) fieldBox(c *ui.Context, el ui.Element) ui.Element {
 	p := a.look
-	return el.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder)
+	el = el.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder)
+	a.settingsFieldChrome(el, el)
+	return el
 }
 
 // lineField is a 22pt settings field whose 13pt text is centered. The
@@ -2570,6 +2730,7 @@ func (a *App) lineField(c *ui.Context, value *string, placeholder, font string) 
 	}
 	in.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).FocusRing(false)
 	paintPlaceholder(c, in, p.TextTertiary)
+	a.settingsFieldChrome(in, in)
 	return in
 }
 
@@ -2618,10 +2779,10 @@ func (a *App) providerSelect(c *ui.Context) ui.Element {
 func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 	p := a.look
 	shown := strconv.FormatFloat(a.formMax, 'f', 0, 64)
-	var focus ui.Element
+	var focus, field, col, up, down ui.Element
 	row := ui.Row(c).Gap(4).AlignItems(ui.Center)
 	row.Children(func() {
-		field := ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center)
+		field = ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center)
 		field.Children(func() {
 			in := ui.TextInputBase(c, &shown).Font("ui-monospace").FontSize(12).LineHeight(16.0/12.0).Grow(1).MinWidth(0).Padding(3, 0)
 			in.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
@@ -2633,15 +2794,16 @@ func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 			}
 		})
 		// One control: the two halves share the rounded rect.
-		ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder).Clip().Shrink(0).Children(func() {
-			up := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
+		col = ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder).Shrink(0)
+		col.Children(func() {
+			up = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
 			up.Children(func() {
 				ui.Icon(c, iconChevron).Size(8, 8).Rotate(180).TextColor(p.TextSecondary)
 			})
 			if up.Clicked() {
 				a.formMax = math.Min(200000, a.formMax+1)
 			}
-			down := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
+			down = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
 			down.Children(func() {
 				ui.Icon(c, iconChevron).Size(8, 8).TextColor(p.TextSecondary)
 			})
@@ -2650,6 +2812,8 @@ func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 			}
 		})
 	})
+	a.settingsFieldChrome(field, focus)
+	a.stepperRing(col, up, down)
 	if focus.Valid() {
 		return focus
 	}
@@ -2698,6 +2862,11 @@ func (a *App) temperatureSlider(c *ui.Context) ui.Element {
 		painter.Fill(knob, p.ControlKnob, kw/2)
 		painter.Stroke(knob, p.ControlBorder, kw/2, 0.5)
 	})
+	frac := float32(0)
+	if a.formTemp > 0 {
+		frac = float32(a.formTemp / 2)
+	}
+	a.sliderKnobRing(s, inset, frac)
 	return s
 }
 
@@ -2730,6 +2899,7 @@ func (a *App) appearanceControl(c *ui.Context) ui.Element {
 	if track.Changed() {
 		a.setAppearance(appearanceFromIndex(idx), c.Now())
 	}
+	a.segmentedRing(track)
 	return track
 }
 
@@ -2739,12 +2909,13 @@ func (a *App) lastRequestRow(c *ui.Context) {
 	preview := ui.Text(c, full).Font("ui-monospace").FontSize(12).TextColor(p.TextSecondary).MaxLines(4).Ellipsis("…").FillWidth().MinWidth(0)
 	a.tip(c, preview, full)
 	btn := ui.ButtonBase(c).Height(22).Gap(1).Padding(0).AlignItems(ui.Center).Label("View JSON").Cursor(ui.CursorPointer).Shrink(0)
+	a.textButtonRing(btn)
 	btn.Children(func() {
 		controlText(c, "View JSON", 12, 0, 500, p.TextLink)
 		ui.Icon(c, iconChevronRight).Size(11, 11).TextColor(p.TextLink)
 	})
 	if btn.Clicked() {
-		a.requestOpen = true
+		a.openRequest()
 	}
 }
 
@@ -2785,8 +2956,9 @@ func (a *App) prefsView(c *ui.Context) {
 }
 
 func (a *App) requestModal(c *ui.Context) {
+	wasOpen := a.requestOpen
 	t := c.Theme()
-	ui.Modal(c, &a.requestOpen, func() {
+	panel := ui.Modal(c, &a.requestOpen, func() {
 		ui.Column(c).Width(560).Gap(12).Children(func() {
 			ui.Text(c, "Last request").FontSize(18).Bold()
 			ui.Text(c, "The full JSON of this chat's most recent request. The API key stays in the header.").TextColor(t.TextMuted)
@@ -2800,6 +2972,9 @@ func (a *App) requestModal(c *ui.Context) {
 			})
 		})
 	})
+	if wasOpen && !a.requestOpen {
+		a.popFocusReturnShown(panel.Valid() && panel.DismissedByKey())
+	}
 }
 
 func (a *App) chatLastRequest() string {
@@ -3066,16 +3241,21 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	}
 	slot := a.hScrollSlot(a.hScrollKey("code", b.Index))
 	edge := scrollEdge(p.CodeBg, a.cardFlat())
+	// Clip the header to the block's rounded corners. 7pt of right
+	// padding fits the Copy ring, which grows 3pt outside the button.
 	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).Clip().AlignSelf(ui.Stretch).Label("code block").Children(func() {
-		ui.Row(c).Height(28).Padding(0, 4, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
+		ui.Row(c).Height(28).Padding(0, 7, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
 			ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
 			ui.Spacer(c)
-			b.CopyButton(c)
+			copy := b.CopyButton(c)
+			a.quietControl(copy, radiusRow)
+			a.noteMessageTab(copy)
+			a.takeTab(c, copy)
 		})
 		// Body hardcodes 0.25em (3.5px at 14pt) above the code. The design
 		// pre is 10px 12px 12px, and the sides and bottom already come
 		// from CodeBlockPadding.
-		ui.Column(c).Padding(6.5, 0, 0, 0).AlignSelf(ui.Stretch).Label("qcode:" + lang).Children(func() {
+		ui.Column(c).Padding(6.5, 0, 0, 0).Clip().AlignSelf(ui.Stretch).Label("qcode:" + lang).Children(func() {
 			ui.Box(c).AlignSelf(ui.Stretch).Children(func() {
 				b.Body(c).TrackScroll(&slot.st).AlignSelf(ui.Stretch)
 				hScrollFades(c, slot, "code", edge)

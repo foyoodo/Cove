@@ -35,12 +35,11 @@ type tooltips struct {
 
 // TooltipBase shows a tip without a look by anchor: fn styles the tip and
 // builds its content. It shows once the pointer has rested on anchor for
-// 0.6 seconds, at once as anchor gets the keyboard focus from the
-// keyboard, and at once too within 0.4 seconds of another tip going, as
-// the pointer moves along a toolbar. It goes as the pointer leaves anchor
-// or presses it, and with Escape, until the pointer comes back or the
-// focus does. Over elements inside one another, the innermost one's tip
-// shows; one shows at a time.
+// 0.6 seconds, and at once within 0.4 seconds of another tip going, as
+// the pointer moves along a toolbar. Keyboard focus does not open a tip.
+// It goes as the pointer leaves anchor or presses it, and with Escape,
+// until the pointer comes back. Over elements inside one another, the
+// innermost one's tip shows; one shows at a time.
 //
 // The tip goes above anchor, centered, or below it where there is no room
 // above; fn may place it elsewhere with AttachTo, as after it:
@@ -89,9 +88,9 @@ func tooltipBase(c *context, anchor *node, fn func(tip *node)) (*node, bool) {
 	return tip, rt.tips.byFocus
 }
 
-// Tooltip shows s by the element when the pointer rests on it, or the
-// keyboard focus comes to it, as TooltipBase does: above the element,
-// centered, or below it where there is no room above. It describes the
+// Tooltip shows s by the element when the pointer rests on it, as
+// TooltipBase does: above the element, centered, or below it where there
+// is no room above. Keyboard focus does not open it. It describes the
 // element to assistive technology where Description does not.
 func (e *node) Tooltip(s string) *node {
 	if e.description == "" {
@@ -115,8 +114,8 @@ func (e *node) Tooltip(s string) *node {
 
 // showTooltip returns the element whose tip shows in the frame, deciding it
 // once: the innermost element with a tip under the pointer once it has
-// rested there long enough, or the one with the keyboard focus from the
-// keyboard, whichever came last.
+// rested there long enough. Keyboard focus does not open a tip, so the
+// focus ring stays clear of it.
 func (rt *engine) showTooltip(c *context) uint64 {
 	t := &rt.tips
 	if t.frame == rt.frame && t.pass == rt.pass {
@@ -142,14 +141,7 @@ func (rt *engine) showTooltip(c *context) uint64 {
 	if hover != t.hover {
 		t.hover, t.hoverSince = hover, now
 	}
-	var focus uint64
-	if rt.focusVisible && rt.windowFocus() && tipped(rt.focused) {
-		focus = rt.focused
-	}
-	if focus != t.focus {
-		t.focus, t.focusSince = focus, now
-	}
-	if t.dismissed != hover && t.dismissed != focus {
+	if t.dismissed != hover {
 		t.dismissed = 0
 	}
 	if rt.pressed != nil && hover != 0 {
@@ -158,20 +150,14 @@ func (rt *engine) showTooltip(c *context) uint64 {
 	if hover == t.dismissed {
 		hover = 0
 	}
-	if focus == t.dismissed {
-		focus = 0
-	}
 	t.shown, t.byFocus = 0, false
-	switch {
-	case focus != 0 && (hover == 0 || !t.focusSince.Before(t.hoverSince)):
-		t.shown, t.byFocus = focus, true
-	case hover != 0:
+	if hover != 0 {
 		warm := !t.lastShown.IsZero() && t.hoverSince.Sub(t.lastShown) <= tooltipWarm
 		if wait := tooltipDelay - now.Sub(t.hoverSince); wait > 0 && !warm {
 			rt.scheduleAt(now.Add(wait))
-			break
+		} else {
+			t.shown = hover
 		}
-		t.shown = hover
 	}
 	return t.shown
 }

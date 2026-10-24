@@ -69,6 +69,10 @@ type ListState struct {
 	// which shows in the accent color. The list's Changed reports a new
 	// choice, and its Submitted a double click or Enter.
 	Selected *int
+	// QuietSelection marks the chosen row for the keyboard and for
+	// assistive technology without the accent fill. The row paints its
+	// own background, and a focus ring can sit on top of it.
+	QuietSelection bool
 	// Selection, when set, lets the user choose several rows, which it
 	// holds by their keys: a click chooses one, Cmd-click (Ctrl-click on
 	// Linux and Windows) adds a row or takes it out, and Shift-click
@@ -579,7 +583,15 @@ func (f *listFrame) build(i int) *node {
 		*valueBinding[listRowInput](w) = listRowInput{f: f, i: i}
 		w.onValueInput(listRowValueInput)
 		on := f.chosen(i, key)
-		w.Selected(on)
+		if s.QuietSelection {
+			if on {
+				w.checked = 2
+			} else {
+				w.checked = 1
+			}
+		} else {
+			w.Selected(on)
+		}
 		switch r := t.Radius; {
 		case f.flat && !s.RoundRows:
 		case s.Selection != nil && s.gap == 0 && on:

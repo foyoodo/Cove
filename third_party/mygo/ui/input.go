@@ -83,6 +83,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.SurfaceFocus:
 		rt.windowFocused = true
 		rt.blinkStart = rt.now()
+		// Full Keyboard Access is read once until the desktop reports a
+		// change. Becoming key re-reads it when that notice was missed.
+		rt.themeChanged()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
 		rt.windowFocused = false
@@ -263,6 +266,11 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 	} else {
 		rt.downs = append(rt.downs, 0)
 	}
+	// A left press hides the keyboard ring even when focus stays put:
+	// KeepFocus controls, and a list row that was already focused.
+	if button == 0 {
+		rt.focusVisible = false
+	}
 	if button == 0 && rt.scrollbarPress(chain, x, y) {
 		return
 	}
@@ -290,7 +298,6 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		}
 		if newFocus != rt.focused {
 			rt.focused = newFocus
-			rt.focusVisible = false
 			rt.blinkStart = rt.now()
 		}
 	}
@@ -682,6 +689,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 	if !rt.claimed(k) && rt.scrollKey(mods, key) {
 		return false
 	}
+	if rt.handoffSelection(mods, key) {
+		return false
+	}
 	rt.keys = append(rt.keys, k)
 	rt.requestFrame()
 	return false
@@ -690,6 +700,43 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 // typePause is how long after a letter typed to choose a row the next
 // one starts anew.
 const typePause = time.Second
+
+// handoffSelection gives an unmodified printable key, typed while a
+// non-editable selection has the keyboard, to the app. The app moves the
+// keyboard onto a text field and updateTextInput runs before this returns,
+// so the host can send the original key through the input method. The
+// character is not inserted here. Space, Return, and chords are left alone
+// so Copy and the selection keys still work (they were taken above).
+func (rt *engine) handoffSelection(mods Modifiers, key Key) bool {
+	if rt.selectionHandoff == nil || !handoffKey(mods, key) {
+		return false
+	}
+	s := rt.states[rt.focused]
+	if s == nil || s.flags&flagSelectable == 0 || s.flags&flagEditable != 0 {
+		return false
+	}
+	if !rt.selectionHandoff() {
+		return false
+	}
+	// The host re-dispatches only when this flag is set. Tab and a click
+	// that activate a field leave it clear.
+	rt.handedOff = true
+	rt.updateTextInput()
+	rt.handedOff = false
+	// Typing into the composer is pointer-like: the ring stays off.
+	rt.focusVisible = false
+	rt.requestFrame()
+	return true
+}
+
+// handoffKey reports a printable key with no modifier but Shift.
+// Space, Return, Tab, Escape, and unknown keys stay with the selection.
+func handoffKey(mods Modifiers, key Key) bool {
+	if mods&^Shift != 0 || key == KeySpace || key == KeyEnter || key == KeyTab || key == KeyEscape || key == KeyUnknown {
+		return false
+	}
+	return typesText(keyEvent{mods: mods, key: key})
+}
 
 // typedRune returns the letter, digit or space a key types without
 // modifiers but Shift, in lowercase, for choosing a row by its text.
@@ -918,6 +965,7 @@ const imeContext = 512
 // around the caret.
 func (rt *engine) updateTextInput() {
 	var t platform.TextInputState
+	t.Handoff = rt.handedOff
 	base := 0
 	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
 		t.Active, t.Client, t.NoInputMethod = true, s.textAdapter, s.noIME

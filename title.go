@@ -239,6 +239,13 @@ func (a *App) startTitle(conv *Conversation, manual, dimBar bool) {
 	}
 	if a.win != nil || a.titleAsync {
 		go run()
+		// A title that starts while the sidebar row already has the
+		// keyboard is announced here. A later focus move announces again
+		// from noteSettledFocus. Synchronous tests finish in run and
+		// speak the result instead.
+		if manual && a.settled.kind == focusSidebar && a.settled.id == id {
+			a.sayFocus(focusSidebar, id)
+		}
 		return
 	}
 	run()
