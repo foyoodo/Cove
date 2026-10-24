@@ -124,12 +124,12 @@ type popoverState struct {
 	focusComposer  bool
 	focusMoved     bool
 	// pushed records that opening this menu took a focus snapshot.
-	pushed         bool
-	activate       bool
-	closing        bool
-	animAt         time.Time
-	announced      bool
-	currentID      string
+	pushed    bool
+	activate  bool
+	closing   bool
+	animAt    time.Time
+	announced bool
+	currentID string
 	// keyboardOpen is set when Space, Return, or Down on the focused
 	// anchor opens the menu. A pointer click leaves it false.
 	keyboardOpen bool

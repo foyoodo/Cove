@@ -400,6 +400,11 @@ func (a *App) settingsTitles(c *ui.Context) {
 	a.settingsGroup(c, "Chat titles", func() {
 		a.settingsLine(c, titleToggleLabel, titleToggleHint, true, false, func(*ui.Element) {
 			sw := ui.Switch(c, &a.data.AutoTitles).Label(titleToggleLabel).Description(titleToggleHint)
+			// The ring is the 32×18 capsule, not the setting row. A click
+			// does not move the keyboard. radiusPill keeps the stroke a capsule.
+			sw.Size(32, 18).KeepFocus().FocusRing(false)
+			a.keyboardRingOnly(sw, radiusPill)
+			a.noteSettingsStop(sw, false)
 			if sw.Changed() {
 				if !a.data.AutoTitles {
 					a.cancelAutoTitles()

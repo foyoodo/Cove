@@ -398,7 +398,11 @@ func (a *App) noteSettledFocus(c *ui.Context) {
 		a.searchOriginSet = true
 	}
 	a.searchWas = searchNow
-	a.settled = a.captureFocus(c)
+	next := a.captureFocus(c)
+	if next.kind == focusSidebar && (a.settled.kind != focusSidebar || a.settled.id != next.id) {
+		a.sayFocus(focusSidebar, next.id)
+	}
+	a.settled = next
 }
 
 func (a *App) captureFocus(c *ui.Context) focusPlace {
@@ -553,9 +557,14 @@ func (a *App) sayFocus(kind focusKind, id string) {
 	switch kind {
 	case focusComposer:
 		a.announce = "Message Cove, text field"
+	case focusSidebar:
+		// The list already speaks the row title. The generating state is
+		// not a separate list label change VoiceOver is guaranteed to
+		// notice, so say it when the keyboard lands on that row.
+		if a.titleDimmed(id, false) {
+			a.announce = titleGenerating
+		}
 	}
-	// Sidebar rows are announced by the list itself. A second reading of
-	// the title doubles what VoiceOver speaks.
 }
 
 func (a *App) stayOnSidebar(ring bool) {

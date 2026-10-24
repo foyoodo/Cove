@@ -308,15 +308,16 @@ func assertSingleTurn(t *testing.T, a *App, question string) {
 
 func openMoreFromKeyboard(t *testing.T, tt *ui.Tester) {
 	t.Helper()
-	if err := tt.Click("More"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Key(0, ui.KeyEscape)
-	if moreOpen(tt) {
-		t.Fatal("Escape left More open")
+	// A pointer click on More does not move the keyboard, and Escape
+	// returns to the composer. Full Keyboard Access reaches the button,
+	// and Space opens the menu from there.
+	tt.SetPreferences(ui.Preferences{FullKeyboardAccess: true, TextScale: 1})
+	tt.Frame()
+	for i := 0; i < 24 && !tt.Focused("More"); i++ {
+		tt.Key(0, ui.KeyTab)
 	}
 	if !tt.Focused("More") {
-		t.Fatal("Escape did not return focus to More")
+		t.Fatal("Tab did not reach More")
 	}
 	tt.Key(0, ui.KeySpace)
 	if hot := hotLabeled(kindMarks(t, tt, "more")); hot.label != "Chat Settings…" {

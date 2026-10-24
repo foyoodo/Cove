@@ -504,7 +504,11 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 		}
 		if regen.Chosen() {
 			// Another chat stays in the sidebar only. The open chat greys
-			// its title bar in the same frame as its row.
+			// its title bar in the same frame as its row, and the keyboard
+			// stays where it was.
+			if id == a.data.ActiveID {
+				a.activateChat(id, false)
+			}
 			a.regenerateTitle(id, id == a.data.ActiveID)
 		}
 		m.Separator()
@@ -979,6 +983,9 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 				a.beginRename()
 			case "retitle":
 				if conv := a.active(); conv != nil {
+					// The menu's own close restores the pre-open place.
+					// Regenerating must not send the keyboard to the composer.
+					a.activateChat(conv.ID, false)
 					a.regenerateTitle(conv.ID, true)
 				}
 			case "delete":

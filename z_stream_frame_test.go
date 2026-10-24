@@ -39,7 +39,7 @@ const (
 	streamSteadyP95   = 32 * time.Millisecond
 	streamSteadyMax   = 40 * time.Millisecond
 	streamSteadyP50   = 8 * time.Millisecond
-	engineStatsOffset = 9504
+	engineStatsOffset = 9512
 )
 
 // frameProbe matches ui.frameStats (mygo v0.5.5, amd64) so runFrame's laps

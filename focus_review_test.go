@@ -333,8 +333,8 @@ func TestDialogRingFollowsFocus(t *testing.T) {
 }
 
 func TestUnknownAccentContrast(t *testing.T) {
-	red := ui.Hex("#FF3B30")
-	yellow := ui.Hex("#FFCC00")
+	red := ui.Color{R: 255, G: 59, B: 48, A: 255}
+	yellow := ui.Color{R: 255, G: 204, A: 255}
 	for _, dark := range []bool{false, true} {
 		for _, accent := range []ui.Color{red, yellow} {
 			got := contrastRing(accent, dark)
@@ -482,4 +482,146 @@ func TestTwentyChatSwitches(t *testing.T) {
 	if a.active().Draft != "hello woXrld" {
 		t.Fatalf("caret after 20 switches: %q", a.active().Draft)
 	}
+}
+
+func TestGeneratingTitleAnnounced(t *testing.T) {
+	a, tt := focusChats(t)
+	a.titleJobs = map[string]*titleJob{"c2": {gen: 1, manual: true}}
+	tt.Frame()
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	if announced(tt, titleGenerating) {
+		t.Fatal("a row that is not generating announced a title")
+	}
+	tt.Key(0, ui.KeyDown)
+	requireSidebar(t, a, "Alpha")
+	if !announced(tt, titleGenerating) {
+		t.Fatal("moving onto a generating title was silent")
+	}
+}
+
+func clickSmall(t *testing.T, tt *ui.Tester, label string, maxH, maxW float32) {
+	t.Helper()
+	var best ui.Rect
+	ok := false
+	for _, r := range tt.FindAll(label) {
+		if maxH > 0 && r.H > maxH {
+			continue
+		}
+		if maxW > 0 && r.W > maxW {
+			continue
+		}
+		if !ok || r.W*r.H < best.W*best.H {
+			best, ok = r, true
+		}
+	}
+	if !ok {
+		t.Fatalf("no small %q", label)
+	}
+	tt.ClickAt(best.X+best.W/2, best.Y+best.H/2)
+}
+
+func announced(tt *ui.Tester, text string) bool {
+	for _, s := range tt.Announcements() {
+		if s == text {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTitleSwitchClickKeepsFocus(t *testing.T) {
+	a, tt := focusChats(t)
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	scrollTitlesIntoView(t, a, tt)
+	before := a.data.AutoTitles
+	clickSmall(t, tt, titleToggleLabel, 22, 40)
+	if tt.Focused(titleToggleLabel) {
+		t.Fatal("clicking the title switch took focus")
+	}
+	if a.data.AutoTitles == before {
+		t.Fatal("title switch did not toggle")
+	}
+}
+
+func TestTitleModelMenuRestoresButton(t *testing.T) {
+	a, tt := focusChats(t)
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	enableFullKeyboard(tt)
+	label := "Title model, " + titleSameAsChat
+	if !focusUntil(t, tt, label, 24) {
+		t.Fatal("did not reach the title model button")
+	}
+	tt.Key(0, ui.KeySpace)
+	tt.Frame()
+	st := a.popovers["settings-title-model"]
+	if st == nil || !st.open {
+		t.Fatal("title model menu did not open")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.popupOpen() || a.returnDepth != 0 {
+		t.Fatalf("open %v depth %d", a.popupOpen(), a.returnDepth)
+	}
+	if !tt.Focused(label) {
+		t.Fatal("title model menu did not return to its button")
+	}
+}
+
+func TestRegenerateTitleKeepsPlace(t *testing.T) {
+	a, tt := focusChats(t)
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "More", 16) {
+		t.Fatal("did not reach More")
+	}
+	tt.Key(0, ui.KeySpace)
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	tt.Key(0, ui.KeyDown)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if st := a.popovers["title-more"]; st != nil && st.open {
+		t.Fatalf("menu stayed open, highlight %d", st.hi)
+	}
+	if !tt.Focused("More") {
+		t.Fatal("keyboard Regenerate Title did not return to More")
+	}
+	if a.settled.kind == focusComposer {
+		t.Fatal("keyboard Regenerate Title moved to the composer")
+	}
+	active := a.data.ActiveID
+
+	focusDraft(t, tt)
+	requireComposer(t, a, tt)
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click(titleRegenLabel); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	requireComposer(t, a, tt)
+	if a.data.ActiveID != active {
+		t.Fatalf("More regenerate switched to %s", a.data.ActiveID)
+	}
+
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	tt.RightClick("Alpha")
+	tt.Frame()
+	if err := tt.ChooseMenuItem(titleRegenLabel); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.data.ActiveID != active {
+		t.Fatalf("sidebar regenerate switched to %s", a.data.ActiveID)
+	}
+	requireSidebar(t, a, "Focus")
 }

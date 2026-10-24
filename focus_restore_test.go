@@ -672,7 +672,7 @@ func cropLargest(t *testing.T, dir, name string, tt *ui.Tester, label string, pa
 func cropPick(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, maxH, maxW float32, largest bool) {
 	t.Helper()
 	if r, ok := tt.FocusedRect(label); ok && (maxH <= 0 || r.H <= maxH) && (maxW <= 0 || r.W <= maxW) {
-		writeFocusPNG(t, filepath.Join(dir, name), focusCrop(tt.Image(), r, pad, 1))
+		writeCrop(t, dir, name, tt, label, r, pad)
 		return
 	}
 	var best ui.Rect
@@ -695,7 +695,43 @@ func cropPick(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, 
 		}
 		best = r
 	}
-	writeFocusPNG(t, filepath.Join(dir, name), focusCrop(tt.Image(), best, pad, 1))
+	writeCrop(t, dir, name, tt, label, best, pad)
+}
+
+func bringIntoView(t *testing.T, a *App, tt *ui.Tester, label string) {
+	t.Helper()
+	for i := 0; i < 30; i++ {
+		r, ok := tt.FocusedRect(label)
+		if !ok || r.H < 1 || r.W < 1 {
+			for _, cand := range tt.FindAll(label) {
+				if cand.H > r.H {
+					r, ok = cand, true
+				}
+			}
+		}
+		if ok && r.H > 1 && r.W > 1 && r.Y >= 60 && r.Y+r.H <= 730 {
+			return
+		}
+		if ok && r.Y < 60 && a.formScroll.Y > 0 {
+			a.formScroll.Y -= 64
+			if a.formScroll.Y < 0 {
+				a.formScroll.Y = 0
+			}
+		} else {
+			a.formScroll.Y += 64
+		}
+		tt.Frame()
+	}
+}
+
+func writeCrop(t *testing.T, dir, name string, tt *ui.Tester, label string, r ui.Rect, pad float32) {
+	t.Helper()
+	img := focusCrop(tt.Image(), r, pad, 1)
+	b := img.Bounds()
+	if b.Dx() < 2 || b.Dy() < 2 {
+		t.Fatalf("%s crop of %q is empty at %+v", name, label, r)
+	}
+	writeFocusPNG(t, filepath.Join(dir, name), img)
 }
 
 func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {
@@ -741,9 +777,21 @@ func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {
 		t.Fatal("switch is not a tab stop")
 	}
 	cropLabeled(t, dir, "settings-switch-"+suffix+".png", tt, "Show reasoning while generating", 10, 22, 40)
+	if !focusUntil(t, tt, titleToggleLabel, 6) {
+		t.Fatal("title switch is not a tab stop")
+	}
+	bringIntoView(t, a, tt, titleToggleLabel)
+	cropLabeled(t, dir, "title-switch-"+suffix+".png", tt, titleToggleLabel, 10, 22, 40)
+	titleModel := "Title model, " + titleSameAsChat
+	if !focusUntil(t, tt, titleModel, 4) {
+		t.Fatal("title model is not a tab stop")
+	}
+	bringIntoView(t, a, tt, titleModel)
+	cropLabeled(t, dir, "title-model-"+suffix+".png", tt, titleModel, 10, 30, 0)
 	if !focusUntil(t, tt, "View acknowledgements", 8) {
 		t.Fatal("link is not a tab stop")
 	}
+	bringIntoView(t, a, tt, "View acknowledgements")
 	cropLabeled(t, dir, "link-"+suffix+".png", tt, "View acknowledgements", 8, 0, 0)
 
 	if err := tt.Click("Appearance"); err != nil {
