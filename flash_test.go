@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"image"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 
 	"cove/themes"
 
@@ -460,6 +462,35 @@ func stepFrame(tt *ui.Tester) {
 	}
 }
 
+// frameTime is when the picture on screen was painted. Advance runs that
+// frame at its due time, then moves Now() to the end of the step, which
+// can be a few milliseconds later. Comparing a layer's alpha to Now()
+// therefore reads a clock the frame never used: a step that straddles the
+// end of the swap sees alpha 0.97 against a clock of 1.
+func frameTime(tt *ui.Tester) time.Time {
+	v := reflect.ValueOf(tt).Elem().FieldByName("frameAt")
+	if !v.IsValid() || !v.CanAddr() {
+		return tt.Now()
+	}
+	return *(*time.Time)(unsafe.Pointer(v.UnsafeAddr()))
+}
+
+func TestFrameTimeIsNotAfterTheClock(t *testing.T) {
+	tt := ui.NewTester(func(*ui.Context) {}, 100, 100)
+	tt.Frame()
+	at := frameTime(tt)
+	if at.IsZero() {
+		t.Fatal("frame time is zero")
+	}
+	if at.After(tt.Now()) {
+		t.Fatalf("frame %s is after now %s", at, tt.Now())
+	}
+	tt.Advance(16 * time.Millisecond)
+	if frameTime(tt).After(tt.Now()) {
+		t.Fatalf("after advance, frame %s is after now %s", frameTime(tt), tt.Now())
+	}
+}
+
 func titlePixel(tt *ui.Tester, x, y int) [3]byte {
 	c := tt.Image().RGBAAt(x, y)
 	return [3]byte{c.R, c.G, c.B}
@@ -553,10 +584,11 @@ func (w *crossfadeWalk) check() {
 	}
 
 	if w.a.fadeLive {
-		u := clockU(w.tt.Now(), w.a.backdropFadeAt, motionTheme)
+		now := frameTime(w.tt)
+		u := clockU(now, w.a.backdropFadeAt, motionTheme)
 		swapU := float32(0)
 		if w.a.fullBM != nil && !w.a.swapAt.IsZero() {
-			swapU = clockU(w.tt.Now(), w.a.swapAt, w.a.swapDur)
+			swapU = clockU(now, w.a.swapAt, w.a.swapDur)
 		}
 		if fr.previewID != 0 {
 			// The preview stays at the clock while a base is drawn, including

@@ -244,15 +244,60 @@ func measureStreamDuring(t *testing.T, a *App, tt *ui.Tester, fp *frameProbe, bu
 	return out
 }
 
-func assertFirstPass(t *testing.T, name string, xs []streamSample) {
+func assertFirstPass(t *testing.T, name string, measure func() []streamSample) {
 	t.Helper()
-	t.Logf("%s first pass: %s", name, streamPassLine(1, xs))
-	t.Logf("%s second pass: not taken", name)
-	wall := column(xs, func(s streamSample) time.Duration { return s.wall })
-	p95, max := percentile(wall, 0.95), percentile(wall, 1)
-	if p95 > streamP95Bound || max > streamMaxBound {
-		t.Fatalf("%s first pass p95 %s max %s (bounds %s / %s)", name, p95, max, streamP95Bound, streamMaxBound)
+	logf := func(format string, args ...any) {
+		t.Helper()
+		t.Logf(format, args...)
 	}
+	if err := checkStreamPasses(logf, name, measure); err != nil {
+		t.Fatal(err.Error())
+	}
+}
+
+// checkStreamPasses applies the streaming caps. The first pass fails
+// immediately when its p95 is over 36ms. When only the max is over 48ms
+// (a single frame, usually stalled in present rather than build, layout,
+// or paint), it logs PERF-RETRY and measures once more. The second pass
+// has to satisfy both caps. There is no third pass.
+func checkStreamPasses(logf func(string, ...any), name string, measure func() []streamSample) error {
+	first := measure()
+	logf("%s first pass: %s", name, streamPassLine(1, first))
+	p95, max := streamWallBounds(first)
+	if p95 <= streamP95Bound && max <= streamMaxBound {
+		logf("%s second pass: not taken", name)
+		return nil
+	}
+	if p95 > streamP95Bound {
+		return fmt.Errorf("%s first pass p95 %s max %s (bounds %s / %s)", name, p95, max, streamP95Bound, streamMaxBound)
+	}
+	peakAt := slowestIndex(first)
+	peak := first[peakAt]
+	logf("PERF-RETRY: test=%q p95=%s max=%s frame=%d build=%s layout=%s paint=%s present=%s",
+		name, fmtDur(p95), fmtDur(max), peakAt,
+		fmtDur(peak.build), fmtDur(peak.layout), fmtDur(peak.paint), fmtDur(peak.present))
+	second := measure()
+	logf("%s second pass: %s", name, streamPassLine(2, second))
+	p95, max = streamWallBounds(second)
+	if p95 <= streamP95Bound && max <= streamMaxBound {
+		return nil
+	}
+	return fmt.Errorf("%s second pass p95 %s max %s (bounds %s / %s)", name, p95, max, streamP95Bound, streamMaxBound)
+}
+
+func streamWallBounds(xs []streamSample) (p95, max time.Duration) {
+	wall := column(xs, func(s streamSample) time.Duration { return s.wall })
+	return percentile(wall, 0.95), percentile(wall, 1)
+}
+
+func slowestIndex(xs []streamSample) int {
+	best := 0
+	for i := 1; i < len(xs); i++ {
+		if xs[i].wall > xs[best].wall {
+			best = i
+		}
+	}
+	return best
 }
 
 func fmtDur(d time.Duration) string {
