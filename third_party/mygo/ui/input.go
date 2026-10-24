@@ -711,7 +711,11 @@ func (rt *engine) handoffSelection(mods Modifiers, key Key) bool {
 	if !rt.selectionHandoff() {
 		return false
 	}
+	// The host re-dispatches only when this flag is set. Tab and a click
+	// that activate a field leave it clear.
+	rt.handedOff = true
 	rt.updateTextInput()
+	rt.handedOff = false
 	rt.focusVisible = true
 	rt.requestFrame()
 	return true
@@ -953,6 +957,7 @@ const imeContext = 512
 // around the caret.
 func (rt *engine) updateTextInput() {
 	var t platform.TextInputState
+	t.Handoff = rt.handedOff
 	base := 0
 	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
 		t.Active, t.Client, t.NoInputMethod = true, s.textAdapter, s.noIME

@@ -90,20 +90,34 @@ func (a *App) resetAllSettings() {
 func (a *App) settingsWindowRoot(c *ui.Context) {
 	a.inRender = true
 	defer func() { a.inRender = false }()
+	a.paintCtx = c
+	a.beginRings()
+	a.resetSettingsTabs()
+	a.fullKeyboard = c.Preferences().FullKeyboardAccess
+	a.bindLedger(c, true)
 	a.applyLook(c)
+	if a.popupOpen() {
+		c.Shortcut(0, ui.KeyTab)
+		c.Shortcut(ui.Shift, ui.KeyTab)
+	} else if a.confirmKind == "" && !a.acksOpen {
+		if c.Shortcut(0, ui.KeyTab) {
+			a.focusSettingsTab(c, false)
+		}
+		if c.Shortcut(ui.Shift, ui.KeyTab) {
+			a.focusSettingsTab(c, true)
+		}
+	}
 	look := a.look
 	c.Root().Background(look.WindowBaseBottom).Draw(func(p *ui.Painter, r ui.Rect) {
 		a.paintSettingsBackdrop(p, r)
 	})
 	a.buildingSettings = true
-	a.paintCtx = c
-	a.beginRings()
 	a.settingsBody(c)
 	a.confirmDialog(c)
 	a.buildingSettings = false
+	a.finishSettingsTabs()
 	a.veilScrollbar(c)
-	a.finishFocusReturn(c, focusSurfSettings)
-	a.noteSettledFocus(c)
+	a.endFocusFrame(c, focusSurfSettings)
 	if a.prefs != nil {
 		a.prefs.SetTitle(a.settingsHeading())
 	}
@@ -120,6 +134,7 @@ func (a *App) settingsBody(c *ui.Context) {
 				rows := a.visibleSettingsNav()
 				a.syncSettingsNav(rows)
 				a.settingsNav.Selected = &a.settingsNavIndex
+				a.settingsNav.QuietSelection = true
 				a.settingsNav.Label = func(i int) string {
 					if i < 0 || i >= len(rows) {
 						return ""
@@ -155,6 +170,7 @@ func (a *App) settingsBody(c *ui.Context) {
 						a.settingsSection = sec.id
 					}
 				}).Grow(1).FillWidth().Gap(1).FocusRing(false).Label("Settings")
+				a.noteSettingsList(nav)
 				if nav.Changed() && a.settingsNavIndex >= 0 && a.settingsNavIndex < len(rows) {
 					a.leaveProviderPage(c.Now())
 					a.settingsSection = rows[a.settingsNavIndex].id
@@ -242,6 +258,7 @@ func (a *App) settingsSearch(c *ui.Context) {
 		ui.Icon(c, iconSearch).Size(14, 14).TextColor(p.TextSecondary)
 		in := ui.TextInputBase(c, &a.settingsQuery).Placeholder("Search").Label("Search settings").Grow(1).MinWidth(0).FontSize(13)
 		in.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
+		a.noteSettingsStop(in, true)
 		paintPlaceholder(c, in, p.TextSecondary)
 		if in.Focused() {
 			row.Border(1, p.AccentDefault)
@@ -314,6 +331,12 @@ func (a *App) navButton(c *ui.Context, label string, glyph *ui.SVG, enabled bool
 	b.Children(func() {
 		ui.Icon(c, glyph).Size(16, 16).TextColor(p.TextSecondary)
 	})
+	if enabled {
+		a.quietControl(b, radiusRow)
+		a.noteSettingsStop(b, false)
+	} else {
+		b.FocusRing(false)
+	}
 	return b
 }
 
@@ -353,16 +376,16 @@ func (a *App) settingsGeneral(c *ui.Context) {
 			*el = a.sendWithControl(c)
 		})
 		a.settingsLine(c, "Show reasoning while generating", "Collapse it when the reply starts", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.ShowReasoning).Label("Show reasoning while generating").KeepFocus().FocusRing(false)
-			a.keyboardRingOnly(sw, radiusPill)
+			sw := ui.Switch(c, &a.data.ShowReasoning).Label("Show reasoning while generating")
+			a.switchRing(sw)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
 			}
 		})
 		a.settingsRow(c, "Restore last chat on launch", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.RestoreLast).Label("Restore last chat on launch").KeepFocus().FocusRing(false)
-			a.keyboardRingOnly(sw, radiusPill)
+			sw := ui.Switch(c, &a.data.RestoreLast).Label("Restore last chat on launch")
+			a.switchRing(sw)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
@@ -544,6 +567,7 @@ func (a *App) settingsAbout(c *ui.Context) {
 		})
 		a.settingsRow(c, "Acknowledgements", false, false, func(*ui.Element) {
 			b := ui.ButtonBase(c).Height(22).Gap(2).Padding(0, 2).AlignItems(ui.Center).Label("View acknowledgements").Cursor(ui.CursorPointer)
+			a.textButtonRing(b)
 			b.Children(func() {
 				ui.Text(c, "View").FontSize(12).FontWeight(500).TextColor(p.TextLink)
 				ui.Icon(c, iconChevronRight).Size(11, 11).TextColor(p.TextLink)
@@ -595,14 +619,14 @@ func (a *App) themeSwatch(c *ui.Context, preset themes.Preset) {
 	p := a.look
 	pal := themes.Palette(preset.ID, p.Dark)
 	selected := themes.NormalizeTheme(a.data.Theme) == preset.ID
-	btn := ui.ButtonBase(c).Grow(1).MinWidth(0).Radius(8).Clip().Cursor(ui.CursorPointer).Label(preset.Name)
+	btn := ui.ButtonBase(c).Grow(1).MinWidth(0).Radius(8).Cursor(ui.CursorPointer).Label(preset.Name)
 	if selected {
 		btn.Border(2, p.AccentDefault)
 	} else {
 		btn.Border(1, p.SeparatorDefault)
 	}
 	btn.Children(func() {
-		ui.Column(c).FillWidth().Children(func() {
+		ui.Column(c).FillWidth().Radius(8).Clip().Children(func() {
 			ui.Box(c).FillWidth().Height(36).Gradient(pal.WindowBaseTop, pal.WindowBaseBottom, 180)
 			ui.Row(c).FillWidth().Height(18).Padding(0, 6).Gap(4).AlignItems(ui.Center).Background(pal.SelectionRow).Children(func() {
 				ui.Box(c).Size(6, 6).Radius(3).Background(pal.ThemeMark)
@@ -615,6 +639,7 @@ func (a *App) themeSwatch(c *ui.Context, preset themes.Preset) {
 		}
 		ui.Text(c, preset.Name).FontSize(11).FontWeight(weight).Padding(4, 0).TextAlign(ui.Center)
 	})
+	a.swatchRing(btn)
 	if btn.Clicked() {
 		a.setTheme(preset.ID, c.Now())
 	}
@@ -707,8 +732,8 @@ func (a *App) settingsAdvanced(c *ui.Context) {
 			*el = in
 		})
 		a.settingsRow(c, "Keep last request", false, false, func(*ui.Element) {
-			sw := ui.Switch(c, &a.data.KeepLastRequest).Label("Keep last request").KeepFocus().FocusRing(false)
-			a.keyboardRingOnly(sw, radiusPill)
+			sw := ui.Switch(c, &a.data.KeepLastRequest).Label("Keep last request")
+			a.switchRing(sw)
 			if sw.Changed() {
 				a.appearanceSavedUntil = c.Now().Add(motionCopied)
 				a.save()
@@ -995,6 +1020,7 @@ func (a *App) sendWithControl(c *ui.Context) ui.Element {
 		a.appearanceSavedUntil = c.Now().Add(motionCopied)
 		a.save()
 	}
+	a.segmentedRing(track)
 	return track
 }
 
@@ -1042,8 +1068,8 @@ func (a *App) prefTemperature(c *ui.Context) ui.Element {
 	const inset = float32(8)
 	s := ui.SliderBase(c, &a.pref.temp, 0, 2).Step(0.1).Width(148).Height(16).PaddingX(inset).FocusRing(false).Label("Temperature")
 	ui.Textf(c, "%.1f", a.pref.temp).Font("ui-monospace").FontSize(12)
-	sw := ui.Switch(c, &a.pref.tempOn).Label("Send temperature").Size(32, 18).KeepFocus().FocusRing(false)
-	a.keyboardRingOnly(sw, radiusPill)
+	sw := ui.Switch(c, &a.pref.tempOn).Label("Send temperature")
+	a.switchRing(sw)
 	if sw.Changed() {
 		a.commitPref(c.Now())
 	}
@@ -1081,6 +1107,7 @@ func (a *App) prefTemperature(c *ui.Context) ui.Element {
 		painter.Fill(knob, p.ControlKnob, kw/2)
 		painter.Stroke(knob, p.ControlBorder, kw/2, 0.5)
 	})
+	a.sliderKnobRing(s, inset, float32(a.pref.temp/2))
 	return s
 }
 
@@ -1088,9 +1115,10 @@ func (a *App) prefStepper(c *ui.Context) ui.Element {
 	p := a.look
 	shown := strconv.FormatFloat(a.pref.max, 'f', 0, 64)
 	row := ui.Row(c).Gap(4).AlignItems(ui.Center)
-	var focus ui.Element
+	var focus, field, col, up, down ui.Element
 	row.Children(func() {
-		ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center).Children(func() {
+		field = ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center)
+		field.Children(func() {
 			in := ui.TextInputBase(c, &shown).Font("ui-monospace").FontSize(12).Grow(1).MinWidth(0).Padding(3, 0).Label("Max tokens")
 			in.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
 			focus = in
@@ -1101,14 +1129,15 @@ func (a *App) prefStepper(c *ui.Context) ui.Element {
 				}
 			}
 		})
-		ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder).Clip().Children(func() {
-			up := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
+		col = ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder)
+		col.Children(func() {
+			up = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
 			up.Children(func() { ui.Icon(c, iconChevron).Size(8, 8).Rotate(180).TextColor(p.TextSecondary) })
 			if up.Clicked() {
 				a.pref.max = clampMax(a.pref.max + 256)
 				a.commitPref(c.Now())
 			}
-			down := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
+			down = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
 			down.Children(func() { ui.Icon(c, iconChevron).Size(8, 8).TextColor(p.TextSecondary) })
 			if down.Clicked() {
 				a.pref.max = clampMax(a.pref.max - 256)
@@ -1116,6 +1145,8 @@ func (a *App) prefStepper(c *ui.Context) ui.Element {
 			}
 		})
 	})
+	a.settingsFieldChrome(field, focus)
+	a.stepperRing(col, up, down)
 	if focus.Valid() {
 		return focus
 	}

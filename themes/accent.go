@@ -17,6 +17,51 @@ var focusContrastRing = map[string][2]string{
 	"graphite": {"#6D6D6D", "#A0A0A0"},
 }
 
+// AdjustContrastRing keeps an accent that is not one of the six named
+// colors, and walks it toward black or white until it clears 3:1 against
+// a light or dark window. Increase Contrast uses this for red, yellow,
+// and any other system accent instead of the nearest named hue.
+func AdjustContrastRing(accent ui.Color, dark bool) ui.Color {
+	accent.A = 255
+	bg := ui.Hex("#FFFFFF")
+	toward := ui.Hex("#000000")
+	if dark {
+		bg = ui.Hex("#1C1C1E")
+		toward = ui.Hex("#FFFFFF")
+	}
+	c := accent
+	for i := 0; i < 24; i++ {
+		if contrastRatio(c, bg) >= 3 {
+			c.A = 255
+			return c
+		}
+		c = c.Mix(toward, 0.12)
+		c.A = 255
+	}
+	return c
+}
+
+func contrastRatio(a, b ui.Color) float64 {
+	l1 := relLuminance(a)
+	l2 := relLuminance(b)
+	if l1 < l2 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+func relLuminance(c ui.Color) float64 {
+	channel := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	r, g, b := channel(c.R), channel(c.G), channel(c.B)
+	return 0.2126*r + 0.7152*g + 0.0722*b
+}
+
 // FocusContrastRing is the opaque focus ring for Increase Contrast.
 // Unknown accents use blue.
 func FocusContrastRing(id string, dark bool) ui.Color {

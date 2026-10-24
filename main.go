@@ -146,6 +146,7 @@ func (a *App) openSettingsWindow() {
 		Content:              ui.View(a.settingsWindowRoot),
 	})
 	w.OnClosed(func() {
+		a.dropSettingsWindow()
 		a.flushProviderEdits(time.Now())
 		a.settingsPage = settingsList
 		if a.prefs == w {

@@ -515,6 +515,7 @@ func (a *App) quoteCard(c *ui.Context, q Quote, kind int, msgID string, index in
 			return
 		}
 		btn := ui.ButtonBase(c).Absolute().Right(quoteCloseInset).Top(quoteCloseInset).Size(quoteCloseSize, quoteCloseSize).Radius(quoteCloseSize / 2).Center().Label("Remove quote").Cursor(ui.CursorPointer)
+		a.quietControl(btn, quoteCloseSize/2)
 		a.noteQuoteTab(btn)
 		a.takeTab(c, btn)
 		if btn.Hovered() {

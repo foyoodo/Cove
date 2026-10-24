@@ -60,7 +60,7 @@ func (a *App) acknowledgementsSheet(c *ui.Context) {
 		return
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
-		a.closeAcks()
+		a.closeAcksShown(true)
 		return
 	}
 	p := a.look

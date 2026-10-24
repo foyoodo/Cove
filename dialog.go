@@ -16,8 +16,18 @@ const (
 	confirmDeleteProvider = "delprov"
 )
 
-func (a *App) dismissConfirm() {
-	a.endConfirm()
+func (a *App) dismissConfirm(keyboard bool) {
+	a.endConfirm(keyboard)
+}
+
+// releaseConfirmRecord drops a confirm dialog without restoring the place
+// that opened it. applyEdit uses this when it clears the dialog itself.
+func (a *App) releaseConfirmRecord() {
+	if a.confirmKind == "" {
+		return
+	}
+	a.confirmKind = ""
+	a.abandonFocusReturn()
 }
 
 // beginConfirm opens a confirm dialog. The caret returns to the composer
@@ -29,24 +39,24 @@ func (a *App) beginConfirm(kind string) {
 	a.confirmKind = kind
 }
 
-func (a *App) endConfirm() {
+func (a *App) endConfirm(keyboard bool) {
 	a.confirmKind = ""
-	a.popFocusReturn()
+	a.popFocusReturnShown(keyboard)
 }
 
-func (a *App) acceptConfirm() {
+func (a *App) acceptConfirm(keyboard bool) {
 	kind := a.confirmKind
 	id := a.deleteID
 	fromSide := kind == confirmDelete && a.returnTo.kind == focusSidebar
-	ring := a.returnTo.visible
 	a.confirmKind = ""
 	switch kind {
 	case confirmDelete:
 		a.deleteConversation(id)
 		if fromSide && a.data.ActiveID != "" {
 			// The row that opened the dialog is gone. Stay on the adjacent
-			// sidebar row instead of restoring that element.
-			a.stayOnSidebar(ring)
+			// sidebar row instead of restoring that element. The ring
+			// follows the key or click that confirmed.
+			a.stayOnSidebar(keyboard)
 			return
 		}
 		// Other deletes land in the new chat's composer. A menu that
@@ -59,7 +69,7 @@ func (a *App) acceptConfirm() {
 	case confirmDeleteProvider:
 		a.deleteCustomProvider(id, time.Now())
 	}
-	a.popFocusReturn()
+	a.popFocusReturnShown(keyboard)
 }
 
 func (a *App) confirmCopy() (title, body, action string) {
@@ -125,11 +135,11 @@ func (a *App) confirmDialog(c *ui.Context) {
 					cancel := a.dialogButton(c, "Cancel", false, surface)
 					cancel.AutoFocus()
 					if cancel.Clicked() {
-						a.dismissConfirm()
+						a.dismissConfirm(false)
 					}
 					act := a.dialogButton(c, action, true, surface)
 					if act.Clicked() {
-						a.acceptConfirm()
+						a.acceptConfirm(false)
 					}
 				})
 			})
@@ -157,10 +167,8 @@ func (a *App) dialogButton(c *ui.Context, label string, danger bool, surface the
 	b.Children(func() {
 		controlText(c, label, 13, 0, weight, fg)
 	})
-	if label == "Cancel" && a.confirmKind != "" {
-		a.alwaysRing(b, radiusRow)
-	} else {
-		a.keyboardRingOnly(b, radiusRow)
-	}
+	// The ring follows whichever button has the keyboard. Cancel starts
+	// focused; Tab to Delete moves the ring with it.
+	a.focusedRing(b, radiusRow)
 	return b
 }

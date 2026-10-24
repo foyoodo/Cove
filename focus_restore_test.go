@@ -3,6 +3,7 @@ package main
 import (
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -466,6 +467,9 @@ func TestPerChatCaretRestores(t *testing.T) {
 	if a.active().Draft != "hello world" {
 		t.Fatalf("draft %q", a.active().Draft)
 	}
+	for i := 0; i < 3; i++ {
+		tt.Key(0, ui.KeyLeft)
+	}
 	caret, ok := tt.TextCaret()
 	if !ok {
 		t.Fatal("no caret after typing")
@@ -490,12 +494,12 @@ func TestPerChatCaretRestores(t *testing.T) {
 	if !ok {
 		t.Fatal("no caret after switching back")
 	}
-	if back.X+1 < caret.X {
-		t.Fatalf("caret moved to %.1f from %.1f", back.X, caret.X)
+	if back.X+1 < caret.X-2 || back.X > caret.X+2 {
+		t.Fatalf("mid-text caret moved to %.1f from %.1f", back.X, caret.X)
 	}
-	tt.Type("!")
-	if a.active().Draft != "hello world!" {
-		t.Fatalf("caret was not at the end: %q", a.active().Draft)
+	tt.Type("X")
+	if a.active().Draft != "hello woXrld" {
+		t.Fatalf("caret was not mid-text: %q", a.active().Draft)
 	}
 }
 
@@ -571,10 +575,7 @@ func rgbaDelta(a, b color.RGBA) int {
 }
 
 func TestFocusRingShots(t *testing.T) {
-	dir := filepath.Join("/opt/cursor/artifacts", "focus-rings")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := testArtifactDir(t, "focus-rings")
 	save := func(name string, tt *ui.Tester) {
 		t.Helper()
 		writeFocusPNG(t, filepath.Join(dir, name), tt.Image())
@@ -639,44 +640,221 @@ func TestFocusRingShots(t *testing.T) {
 		tt.SetFocused(false)
 		tt.Frame()
 		save("inactive-"+suffix+".png", tt)
-	}
 
-	_, tt := focusChats(t)
+		shotSettingsRings(t, dir, suffix, dark)
+		shotQuoteRing(t, dir, suffix)
+		shotDialogRing(t, dir, suffix)
+	}
+	writeFocusGallery(t, dir)
+}
+
+func focusUntil(t *testing.T, tt *ui.Tester, label string, n int) bool {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if tt.Focused(label) {
+			return true
+		}
+		tt.Key(0, ui.KeyTab)
+	}
+	return tt.Focused(label)
+}
+
+func cropLabeled(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, maxH, maxW float32) {
+	t.Helper()
+	cropPick(t, dir, name, tt, label, pad, maxH, maxW, false)
+}
+
+func cropLargest(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, maxH, maxW float32) {
+	t.Helper()
+	cropPick(t, dir, name, tt, label, pad, maxH, maxW, true)
+}
+
+func cropPick(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, maxH, maxW float32, largest bool) {
+	t.Helper()
+	if r, ok := tt.FocusedRect(label); ok && (maxH <= 0 || r.H <= maxH) && (maxW <= 0 || r.W <= maxW) {
+		writeFocusPNG(t, filepath.Join(dir, name), focusCrop(tt.Image(), r, pad, 1))
+		return
+	}
+	var best ui.Rect
+	ok := false
+	for _, r := range tt.FindAll(label) {
+		if maxH > 0 && r.H > maxH {
+			continue
+		}
+		if maxW > 0 && r.W > maxW {
+			continue
+		}
+		if !ok || (largest && r.W*r.H > best.W*best.H) || (!largest && r.W*r.H < best.W*best.H) {
+			best, ok = r, true
+		}
+	}
+	if !ok {
+		r, found := tt.Find(label)
+		if !found {
+			t.Fatalf("missing %q for %s", label, name)
+		}
+		best = r
+	}
+	writeFocusPNG(t, filepath.Join(dir, name), focusCrop(tt.Image(), best, pad, 1))
+}
+
+func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {
+	t.Helper()
+	a, tt := focusChats(t)
+	// The temperature slider is disabled until a value is sent. Turn it on
+	// so the knob is a tab stop and the ring shot shows the thumb.
+	temp := 1.2
+	a.data.Defaults.Temperature = &temp
+	a.prefReady = false
+	tt.SetDark(dark)
+	tt.Frame()
 	if err := tt.Click("Settings"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if err := tt.Click("General"); err != nil {
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "Search settings", 4) {
+		t.Fatal("settings search is not a tab stop")
+	}
+	cropLabeled(t, dir, "settings-field-"+suffix+".png", tt, "Search settings", 10, 28, 0)
+	if !focusUntil(t, tt, "General", 4) {
+		t.Fatal("settings nav is not a tab stop")
+	}
+	cropLargest(t, dir, "settings-nav-"+suffix+".png", tt, "General", 8, 40, 0)
+	if !focusUntil(t, tt, "Temperature", 8) {
+		t.Fatal("slider is not a tab stop")
+	}
+	cropLabeled(t, dir, "slider-"+suffix+".png", tt, "Temperature", 12, 20, 0)
+	if !focusUntil(t, tt, "Max tokens", 6) {
+		t.Fatal("number field is not a tab stop")
+	}
+	cropLabeled(t, dir, "number-"+suffix+".png", tt, "Max tokens", 10, 28, 100)
+	if !focusUntil(t, tt, "Increase", 4) {
+		t.Fatal("stepper is not a tab stop")
+	}
+	cropLabeled(t, dir, "stepper-"+suffix+".png", tt, "Increase", 14, 16, 0)
+	if !focusUntil(t, tt, "Send with control", 8) {
+		t.Fatal("segmented control is not a tab stop")
+	}
+	cropLabeled(t, dir, "segmented-"+suffix+".png", tt, "Send with control", 10, 0, 0)
+	if !focusUntil(t, tt, "Show reasoning while generating", 6) {
+		t.Fatal("switch is not a tab stop")
+	}
+	cropLabeled(t, dir, "settings-switch-"+suffix+".png", tt, "Show reasoning while generating", 10, 22, 40)
+	if !focusUntil(t, tt, "View acknowledgements", 8) {
+		t.Fatal("link is not a tab stop")
+	}
+	cropLabeled(t, dir, "link-"+suffix+".png", tt, "View acknowledgements", 8, 0, 0)
+
+	if err := tt.Click("Appearance"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	crop("settings-nav-light.png", tt, "General", 8)
-	for i := 0; i < 40 && !tt.Focused("Show reasoning while generating"); i++ {
-		tt.Key(0, ui.KeyTab)
+	if !focusUntil(t, tt, "Warm", 8) {
+		t.Fatal("swatch is not a tab stop")
 	}
-	if tt.Focused("Show reasoning while generating") {
-		crop("settings-switch-light.png", tt, "Show reasoning while generating", 8)
-	}
+	cropLabeled(t, dir, "swatch-"+suffix+".png", tt, "Warm", 12, 0, 0)
+
 	if err := tt.Click("Models & Providers"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if _, ok := tt.Find("OpenAI"); ok {
-		for i := 0; i < 8 && !tt.Focused("OpenAI"); i++ {
-			tt.Key(0, ui.KeyTab)
-		}
-		if tt.Focused("OpenAI") {
-			crop("provider-light.png", tt, "OpenAI", 8)
-		}
+	if !focusUntil(t, tt, "OpenAI", 8) {
+		t.Fatal("provider row is not a tab stop")
 	}
-
-	tt.SetDark(true)
-	tt.Frame()
-	if err := tt.Click("General"); err != nil {
+	cropLabeled(t, dir, "provider-"+suffix+".png", tt, "OpenAI", 8, 0, 0)
+	if err := tt.Click("OpenAI"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	crop("settings-nav-dark.png", tt, "General", 8)
+	if !focusUntil(t, tt, "Back", 6) {
+		t.Fatal("back button is not a tab stop")
+	}
+	cropLabeled(t, dir, "nav-back-"+suffix+".png", tt, "Back", 10, 0, 0)
+}
+
+func shotQuoteRing(t *testing.T, dir, suffix string) {
+	t.Helper()
+	a, tt := focusChats(t)
+	if strings.HasSuffix(suffix, "dark") {
+		tt.SetDark(true)
+		tt.Frame()
+	}
+	a.active().DraftQuotes = []Quote{{Text: "A quoted line", Src: "You"}}
+	tt.Frame()
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	// The quote chip sits just before the composer in the tab order.
+	tt.Key(ui.Shift, ui.KeyTab)
+	if !tt.Focused("Remove quote") {
+		t.Fatal("quote close is not a tab stop")
+	}
+	cropLabeled(t, dir, "quote-close-"+suffix+".png", tt, "Remove quote", 10, 0, 0)
+}
+
+func shotDialogRing(t *testing.T, dir, suffix string) {
+	t.Helper()
+	a, tt := focusChats(t)
+	if strings.HasSuffix(suffix, "dark") {
+		tt.SetDark(true)
+		tt.Frame()
+	}
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	tt.Key(ui.Cmd, ui.KeyBackspace)
+	tt.Frame()
+	if !tt.Focused("Cancel") {
+		t.Fatal("delete dialog did not focus Cancel")
+	}
+	cropLabeled(t, dir, "dialog-cancel-"+suffix+".png", tt, "Cancel", 8, 0, 0)
+}
+
+func writeFocusGallery(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"light", "dark"} {
+		var imgs []image.Image
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasSuffix(name, "-"+suffix+".png") || strings.HasPrefix(name, "gallery-") {
+				continue
+			}
+			f, err := os.Open(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			img, err := png.Decode(f)
+			f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			imgs = append(imgs, img)
+		}
+		if len(imgs) == 0 {
+			t.Fatalf("no %s ring shots", suffix)
+		}
+		gap := 12
+		w, h := 0, gap
+		for _, img := range imgs {
+			b := img.Bounds()
+			if b.Dx() > w {
+				w = b.Dx()
+			}
+			h += b.Dy() + gap
+		}
+		canvas := image.NewRGBA(image.Rect(0, 0, w+gap*2, h))
+		draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.RGBA{246, 246, 247, 255}), image.Point{}, draw.Src)
+		y := gap
+		for _, img := range imgs {
+			b := img.Bounds()
+			draw.Draw(canvas, image.Rect(gap, y, gap+b.Dx(), y+b.Dy()), img, b.Min, draw.Over)
+			y += b.Dy() + gap
+		}
+		writeFocusPNG(t, filepath.Join(dir, "gallery-"+suffix+".png"), canvas)
+	}
 }
 
 func focusCrop(img *image.RGBA, r ui.Rect, pad, scale float32) image.Image {

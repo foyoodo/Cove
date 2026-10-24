@@ -118,6 +118,10 @@ type TextInputState struct {
 	// composed, as winit's set_ime_allowed(false). Browsers cannot turn
 	// input methods off, and ignore it.
 	NoInputMethod bool
+	// Handoff asks the host to deliver the key that just moved the
+	// keyboard onto this field through the input method. It is set only
+	// for a selection handoff, not for Tab or a click that activates a field.
+	Handoff bool
 }
 
 // SurfaceNative holds the native objects of a Surface.

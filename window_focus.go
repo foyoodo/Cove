@@ -2,7 +2,6 @@ package main
 
 import (
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -12,19 +11,8 @@ import (
 // window becomes key (NSWindowDidBecomeKeyNotification): ⌘Tab back to
 // Cove, activating the app, or a Dock click that makes the main window
 // key. The Settings window is a different surface and does not share it.
-//
-//go:linkname contextRuntime github.com/egoist/mygo/ui.(*Context).runtime
-func contextRuntime(c *ui.Context) unsafe.Pointer
-
-//go:linkname engineWindowFocus github.com/egoist/mygo/ui.(*engine).windowFocus
-func engineWindowFocus(rt unsafe.Pointer) bool
-
 func appWindowFocused(c *ui.Context) bool {
-	rt := contextRuntime(c)
-	if rt == nil {
-		return true
-	}
-	return engineWindowFocus(rt)
+	return c.FocusToken().WindowFocused()
 }
 
 const (

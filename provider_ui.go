@@ -61,6 +61,8 @@ func (a *App) providerEmpty(c *ui.Context) {
 		ui.Text(c, "No providers yet").FontSize(17).FontWeight(600).Padding(10, 0, 0, 0)
 		ui.Text(c, "Add a provider to start chatting.").FontSize(13).TextColor(p.TextSecondary).Padding(6, 0, 0, 0)
 		btn := ui.ButtonBase(c).Height(28).Padding(0, 12).Radius(radiusRow).Center().Margin(16, 0, 0, 0).Label("Add Provider…").Cursor(ui.CursorPointer).Background(p.AccentDefault)
+		a.keyboardRingOnly(btn, radiusRow)
+		a.noteSettingsStop(btn, false)
 		btn.Children(func() {
 			controlText(c, "Add Provider…", 13, 0, 500, p.TextOnAccent)
 		})
@@ -81,6 +83,7 @@ func (a *App) providerRow(c *ui.Context, conn *Connection, kind, status string, 
 		}
 		row := ui.ButtonBase(c).FillWidth().MinHeight(36).Padding(4, 10, 4, 12).Gap(8).AlignItems(ui.Center).Label(name).Cursor(ui.CursorPointer)
 		a.keyboardInset(row, radiusRow)
+		a.noteSettingsStop(row, false)
 		if row.Pressed() {
 			row.Background(p.FillPressed)
 		} else if row.Hovered() {
@@ -345,8 +348,8 @@ func (a *App) modelToggleRow(c *ui.Context, m ProviderModel, first bool) {
 			if btn.Clicked() {
 				a.setModelEnabled(id, !on, c.Now())
 			}
-			sw := ui.Switch(c, &on).Label("Show "+id).Size(32, 18).Shrink(0).KeepFocus().FocusRing(false)
-			a.keyboardRingOnly(sw, radiusPill)
+			sw := ui.Switch(c, &on).Label("Show " + id).Shrink(0)
+			a.switchRing(sw)
 			if sw.Changed() {
 				a.setModelEnabled(id, on, c.Now())
 			}

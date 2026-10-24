@@ -874,7 +874,9 @@ func registerSurfaceClass() {
 			// A selection can hand the key to a text field during
 			// KeyPressed. The field was not active when the key arrived,
 			// so interpret the original event now, once, on that field.
-			became := !wasActive && s.input.Active && mods&(platform.ModSuper|platform.ModCtrl) == 0
+			// Handoff is set only for that handoff. Tab into a field
+			// activates text input without asking for the key again.
+			became := !wasActive && s.input.Active && s.input.Handoff && mods&(platform.ModSuper|platform.ModCtrl) == 0
 			// Input methods see the key while a text input has the focus;
 			// they answer with insertText: or setMarkedText:.
 			if ime || (became && !s.input.NoInputMethod) {

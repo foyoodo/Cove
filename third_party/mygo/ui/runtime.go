@@ -310,6 +310,9 @@ type engine struct {
 	// keyboard to a text field; the host then delivers the same key
 	// through the input method. The key is not inserted here.
 	selectionHandoff func() bool
+	// handedOff is set while a selection handoff moves the keyboard onto
+	// a text field, so the host can re-dispatch that key and no other.
+	handedOff bool
 	// dropOver is the element files are dragged over; access is true once
 	// assistive technology asked for the content.
 	dropOver   uint64

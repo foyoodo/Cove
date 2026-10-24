@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 	"time"
-	"unsafe"
 
 	"cove/themes"
 
@@ -53,7 +52,6 @@ const (
 	tabKindComposer
 	tabKindFind
 	tabKindEdit
-	tabKindSettings
 )
 
 type tabHit struct {
@@ -64,26 +62,202 @@ type tabHit struct {
 
 const focusRingWidth float32 = 3
 
-//go:linkname engineFocusedID github.com/egoist/mygo/ui.(*engine).focusedID
-func engineFocusedID(rt unsafe.Pointer) uint64
+// settingsRecordBit separates the headless settings view from the main
+// window. They share one engine, and a real Settings window already has
+// its own. Element ids must not cross.
+const settingsRecordBit uintptr = 0x51F0
 
-//go:linkname engineFocusShows github.com/egoist/mygo/ui.(*engine).focusShows
-func engineFocusShows(rt unsafe.Pointer) bool
+// radiusXS is radius/xs, the text-button and link ring.
+const radiusXS float32 = 4
 
-//go:linkname engineFocusLive github.com/egoist/mygo/ui.(*engine).focusLive
-func engineFocusLive(rt unsafe.Pointer, id uint64, visible bool) bool
+// focusLedger is the focus record of one window. Element ids are compared
+// only with that window's tree.
+type focusLedger struct {
+	settled         focusPlace
+	returnTo        focusPlace
+	depth           int
+	pending         bool
+	surf            int
+	closeKeyboard   bool
+	ringID          uint64
+	ringSeen        uint64
+	ringAt          time.Time
+	searchOrigin    focusPlace
+	searchOriginSet bool
+	searchWas       bool
+}
 
-//go:linkname engineSetFocusShows github.com/egoist/mygo/ui.(*engine).setFocusShows
-func engineSetFocusShows(rt unsafe.Pointer, on bool)
+func (a *App) ensureLedger(token uintptr) *focusLedger {
+	if a.ledgers == nil {
+		a.ledgers = map[uintptr]*focusLedger{}
+	}
+	lg := a.ledgers[token]
+	if lg == nil {
+		lg = &focusLedger{}
+		a.ledgers[token] = lg
+	}
+	return lg
+}
 
-//go:linkname engineFocusID github.com/egoist/mygo/ui.(*engine).focusID
-func engineFocusID(rt unsafe.Pointer, id uint64, visible bool)
+func (a *App) storeLedger() {
+	lg := a.cur
+	if lg == nil {
+		return
+	}
+	lg.settled = a.settled
+	lg.returnTo = a.returnTo
+	lg.depth = a.returnDepth
+	lg.pending = a.returnPending
+	lg.surf = a.returnSurf
+	lg.closeKeyboard = a.closeKeyboard
+	lg.ringID = a.ringID
+	lg.ringSeen = a.ringSeen
+	lg.ringAt = a.ringAt
+	lg.searchOrigin = a.searchOrigin
+	lg.searchOriginSet = a.searchOriginSet
+	lg.searchWas = a.searchWas
+}
 
-//go:linkname engineSetSelectionHandoff github.com/egoist/mygo/ui.(*engine).setSelectionHandoff
-func engineSetSelectionHandoff(rt unsafe.Pointer, fn func() bool)
+func (a *App) loadLedger() {
+	lg := a.cur
+	if lg == nil {
+		return
+	}
+	a.settled = lg.settled
+	a.returnTo = lg.returnTo
+	a.returnDepth = lg.depth
+	a.returnPending = lg.pending
+	a.returnSurf = lg.surf
+	a.closeKeyboard = lg.closeKeyboard
+	a.ringID = lg.ringID
+	a.ringSeen = lg.ringSeen
+	a.ringAt = lg.ringAt
+	a.searchOrigin = lg.searchOrigin
+	a.searchOriginSet = lg.searchOriginSet
+	a.searchWas = lg.searchWas
+}
 
-//go:linkname engineFocusedSelectable github.com/egoist/mygo/ui.(*engine).focusedSelectable
-func engineFocusedSelectable(rt unsafe.Pointer) bool
+func (a *App) clearLiveLedger() {
+	a.settled = focusPlace{}
+	a.returnTo = focusPlace{}
+	a.returnDepth = 0
+	a.returnPending = false
+	a.returnSurf = 0
+	a.closeKeyboard = false
+	a.ringID, a.ringSeen = 0, 0
+	a.ringAt = time.Time{}
+	a.searchOrigin = focusPlace{}
+	a.searchOriginSet = false
+	a.searchWas = false
+}
+
+// bindLedger makes this frame read and write the focus record of c's window.
+// settings marks the Settings window so closing it can drop that record.
+func (a *App) bindLedger(c *ui.Context, settings bool) {
+	token := c.FocusToken().Token()
+	if token == 0 {
+		a.popupEpoch++
+		return
+	}
+	if settings && a.prefs == nil {
+		token ^= settingsRecordBit
+	}
+	if settings {
+		a.settingsToken = token
+	}
+	if a.cur == nil {
+		a.windowToken = token
+		a.cur = a.ensureLedger(token)
+		a.storeLedger()
+		a.popupEpoch++
+		return
+	}
+	if token == a.windowToken {
+		a.popupEpoch++
+		return
+	}
+	a.storeLedger()
+	a.windowToken = token
+	_, seen := a.ledgers[token]
+	a.cur = a.ensureLedger(token)
+	if seen {
+		a.loadLedger()
+	} else {
+		a.clearLiveLedger()
+		a.storeLedger()
+	}
+	a.popupEpoch++
+}
+
+// dropSettingsWindow closes that window's popups and drops its focus
+// record. The main window keeps its own.
+func (a *App) dropSettingsWindow() {
+	token := a.settingsToken
+	if token == 0 {
+		return
+	}
+	a.closeOwnedPopovers(token)
+	if a.windowToken == token {
+		a.clearLiveLedger()
+		a.storeLedger()
+	} else if lg := a.ledgers[token]; lg != nil {
+		lg.depth = 0
+		lg.pending = false
+		lg.returnTo = focusPlace{}
+	}
+	if a.confirmKind == confirmReset || a.confirmKind == confirmDeleteProvider {
+		a.confirmKind = ""
+	}
+}
+
+func (a *App) closeOwnedPopovers(token uintptr) {
+	for _, st := range a.popovers {
+		if st == nil || st.owner != token {
+			continue
+		}
+		st.open = false
+		st.closing = false
+		st.pushed = false
+	}
+}
+
+// sweepPopovers releases a popup that belongs to this window and was not
+// drawn this frame, so a closed window cannot leave the restore counter stuck.
+// Another window's popup is left for that window, or for dropSettingsWindow.
+func (a *App) sweepPopovers() {
+	for _, st := range a.popovers {
+		if st == nil || !st.pushed || st.owner != a.windowToken || st.seen == a.popupEpoch {
+			continue
+		}
+		st.open = false
+		st.closing = false
+		a.releasePopover(st, false)
+	}
+}
+
+func (a *App) notePopover(st *popoverState) {
+	if st == nil {
+		return
+	}
+	st.owner = a.windowToken
+	st.seen = a.popupEpoch
+}
+
+func (a *App) endFocusFrame(c *ui.Context, surf int) {
+	a.sweepPopovers()
+	a.finishFocusReturn(c, surf)
+	a.noteSettledFocus(c)
+	a.storeLedger()
+}
+
+func (a *App) popupOpen() bool {
+	for _, st := range a.popovers {
+		if st != nil && st.open {
+			return true
+		}
+	}
+	return false
+}
 
 func (a *App) focusSurf() int {
 	if a.buildingSettings || (a.settingsOpen && a.prefs == nil) {
@@ -102,12 +276,20 @@ func (a *App) pushFocusReturn() {
 }
 
 func (a *App) popFocusReturn() {
+	a.popFocusReturnShown(false)
+}
+
+// popFocusReturnShown pops one surface. keyboard is the input that closed
+// it: the ring follows that, not the snapshot taken when it opened.
+func (a *App) popFocusReturnShown(keyboard bool) {
 	if a.returnDepth == 0 {
 		return
 	}
 	a.returnDepth--
 	if a.returnDepth == 0 {
 		a.returnPending = true
+		a.closeKeyboard = keyboard
+		a.returnSurf = a.focusSurf()
 	}
 }
 
@@ -142,15 +324,16 @@ func (a *App) finishFocusReturn(c *ui.Context, surf int) {
 }
 
 func (a *App) restorePlace(c *ui.Context, p focusPlace) {
+	show := a.closeKeyboard
 	switch p.kind {
 	case focusSidebar:
 		if a.data.ActiveID == "" {
 			return
 		}
 		a.wantSidebarFocus = true
-		a.wantSidebarRing = p.visible
+		a.wantSidebarRing = show
 		if a.side.Focus(c) {
-			a.showFocusRing(c, p.visible)
+			a.showFocusRing(c, show)
 			a.wantSidebarFocus = false
 			a.wantSidebarRing = false
 		}
@@ -158,11 +341,11 @@ func (a *App) restorePlace(c *ui.Context, p focusPlace) {
 		return
 	case focusSettingsNav:
 		a.focusNavID = p.id
-		a.wantSettingsRing = p.visible
+		a.wantSettingsRing = show
 		return
 	}
 	if p.elem != 0 {
-		if rt := contextRuntime(c); rt != nil && engineFocusLive(rt, p.elem, p.visible) {
+		if tok := c.FocusToken(); tok.Valid() && tok.FocusIfLive(p.elem, show) {
 			if p.kind == focusComposer {
 				a.sayFocus(focusComposer, p.id)
 			}
@@ -177,7 +360,7 @@ func (a *App) restorePlace(c *ui.Context, p focusPlace) {
 		a.focusSearch = true
 		if a.searchInput.Valid() {
 			a.searchInput.Focus()
-			a.showFocusRing(c, p.visible)
+			a.showFocusRing(c, show)
 		}
 	case focusFind:
 		a.finder.wantFocus = true
@@ -199,9 +382,7 @@ func (a *App) restorePlace(c *ui.Context, p focusPlace) {
 }
 
 func (a *App) showFocusRing(c *ui.Context, on bool) {
-	if rt := contextRuntime(c); rt != nil {
-		engineSetFocusShows(rt, on)
-	}
+	c.FocusToken().SetFocusVisible(on)
 }
 
 func (a *App) noteSettledFocus(c *ui.Context) {
@@ -221,14 +402,14 @@ func (a *App) noteSettledFocus(c *ui.Context) {
 }
 
 func (a *App) captureFocus(c *ui.Context) focusPlace {
-	rt := contextRuntime(c)
+	tok := c.FocusToken()
 	var elem uint64
 	var visible bool
 	selectable := false
-	if rt != nil {
-		elem = engineFocusedID(rt)
-		visible = engineFocusShows(rt)
-		selectable = engineFocusedSelectable(rt)
+	if tok.Valid() {
+		elem = tok.FocusedID()
+		visible = tok.FocusShows()
+		selectable = tok.FocusedSelectable()
 	}
 	p := focusPlace{elem: elem, visible: visible}
 	switch {
@@ -372,11 +553,9 @@ func (a *App) sayFocus(kind focusKind, id string) {
 	switch kind {
 	case focusComposer:
 		a.announce = "Message Cove, text field"
-	case focusSidebar:
-		if conv := a.conversation(id); conv != nil && conv.Title != "" {
-			a.announce = conv.Title
-		}
 	}
+	// Sidebar rows are announced by the list itself. A second reading of
+	// the title doubles what VoiceOver speaks.
 }
 
 func (a *App) stayOnSidebar(ring bool) {
@@ -404,23 +583,23 @@ func (a *App) handoffSelectionKey() bool {
 	// The composer element from the last frame is not a live handle between
 	// frames. Its id still names the text field, so the original key can
 	// go through the input method before the next frame rebuilds it.
-	if a.focusRT == nil || !engineFocusLive(a.focusRT, a.composerElem, true) {
+	if !a.focusRT.Valid() || !a.focusRT.FocusIfLive(a.composerElem, true) {
 		return false
 	}
-	if conv := a.active(); conv != nil {
-		a.focusComposerID = conv.ID
-	}
+	// The next frame must not Focus the composer again or move the caret.
+	// The input method may already be composing from this key.
+	a.imeHandoff = true
 	a.sayFocus(focusComposer, a.data.ActiveID)
 	return true
 }
 
 func (a *App) bindSelectionHandoff(c *ui.Context) {
-	rt := contextRuntime(c)
-	if rt == nil {
+	tok := c.FocusToken()
+	if !tok.Valid() {
 		return
 	}
-	a.focusRT = rt
-	engineSetSelectionHandoff(rt, a.handoffSelectionKey)
+	a.focusRT = tok
+	tok.SetSelectionHandoff(a.handoffSelectionKey)
 }
 
 // --- sidebar search -------------------------------------------------------
@@ -525,13 +704,9 @@ func (a *App) onSearchKey(k ui.TextKey) bool {
 		a.commitSearch()
 		k.SetText("")
 		return true
-	case ui.KeyDown:
-		a.enterSearchList()
-		return true
-	case ui.KeyUp:
-		a.moveSearch(-1)
-		return true
 	}
+	// Up and Down stay on the field's Shortcut. A single-line field does
+	// not want them, and the window claims Up, so OnTextKey does not see them.
 	return false
 }
 
@@ -600,12 +775,6 @@ func (a *App) assembleTabs() {
 		}
 		chain = append(chain, tabHit{kind: kind, elem: el.ID()})
 	}
-	addID := func(id uint64, always bool) {
-		if id == 0 || (!always && !a.fullKeyboard) {
-			return
-		}
-		chain = append(chain, tabHit{kind: tabKindElem, elem: id})
-	}
 	add(a.tabSearch, tabKindSearch, true)
 	add(a.tabList, tabKindList, true)
 	for _, el := range a.tabQuotes {
@@ -628,7 +797,6 @@ func (a *App) assembleTabs() {
 	add(a.tabNewChat, tabKindElem, false)
 	add(a.tabSettings, tabKindElem, false)
 	add(a.tabFind, tabKindFind, true)
-	_ = addID
 	a.tabChain = chain
 }
 
@@ -638,10 +806,7 @@ func (a *App) focusTab(c *ui.Context, back bool) {
 	if n == 0 {
 		return
 	}
-	cur := uint64(0)
-	if rt := contextRuntime(c); rt != nil {
-		cur = engineFocusedID(rt)
-	}
+	cur := c.FocusToken().FocusedID()
 	i := -1
 	for j, hit := range chain {
 		if hit.elem == cur {
@@ -672,15 +837,75 @@ func (a *App) focusTab(c *ui.Context, back bool) {
 		a.showFocusRing(c, true)
 	case tabKindFind:
 		a.finder.wantFocus = true
-	case tabKindSettings:
-		a.focusNavID = hit.name
-		a.wantSettingsRing = true
 	default:
 		a.tabWant = hit.elem
-		if rt := contextRuntime(c); rt != nil {
-			engineFocusID(rt, hit.elem, true)
+		c.FocusToken().FocusID(hit.elem, true)
+	}
+}
+
+func (a *App) resetSettingsTabs() {
+	a.settingsTabBuf = a.settingsTabBuf[:0]
+}
+
+func (a *App) noteSettingsStop(el ui.Element, always bool) {
+	if !a.buildingSettings || !el.Valid() {
+		return
+	}
+	if !always && !a.fullKeyboard {
+		return
+	}
+	a.settingsTabBuf = append(a.settingsTabBuf, tabHit{kind: tabKindElem, elem: el.ID()})
+}
+
+func (a *App) noteSettingsList(el ui.Element) {
+	if !el.Valid() {
+		return
+	}
+	a.settingsTabBuf = append(a.settingsTabBuf, tabHit{kind: tabKindList, elem: el.ID()})
+}
+
+func (a *App) finishSettingsTabs() {
+	a.settingsChain = append(a.settingsChain[:0], a.settingsTabBuf...)
+}
+
+func (a *App) focusSettingsTab(c *ui.Context, back bool) {
+	chain := a.settingsChain
+	n := len(chain)
+	if n == 0 {
+		return
+	}
+	cur := c.FocusToken().FocusedID()
+	i := -1
+	for j, hit := range chain {
+		if hit.elem == cur {
+			i = j
+			break
 		}
 	}
+	next := 0
+	switch {
+	case i < 0 && back:
+		next = n - 1
+	case i < 0:
+		next = 0
+	case back:
+		next = (i - 1 + n) % n
+	default:
+		next = (i + 1) % n
+	}
+	hit := chain[next]
+	if hit.kind == tabKindList {
+		a.focusNavID = a.settingsSection
+		a.wantSettingsRing = true
+		if a.settingsNav.Focus(c) {
+			a.showFocusRing(c, true)
+			a.focusNavID = ""
+			a.wantSettingsRing = false
+		}
+		return
+	}
+	a.tabWant = hit.elem
+	c.FocusToken().FocusID(hit.elem, true)
 }
 
 func (a *App) takeTab(c *ui.Context, el ui.Element) {
@@ -716,13 +941,23 @@ func (a *App) ringColor() ui.Color {
 		return ui.Color{}
 	}
 	if a.paintCtx != nil && a.paintCtx.Preferences().HighContrast {
-		return themes.FocusContrastRing(matchAccentID(a.look.AccentDefault, a.look.Dark), a.look.Dark)
+		return contrastRing(a.look.AccentDefault, a.look.Dark)
 	}
 	return a.look.AccentRing
 }
 
-func matchAccentID(accent ui.Color, dark bool) string {
-	best := "blue"
+// contrastRing uses the approved table when the accent is one of the six
+// named colors. Anything else, including red and yellow system accents,
+// is the accent itself walked toward black or white until it clears 3:1.
+func contrastRing(accent ui.Color, dark bool) ui.Color {
+	if id, dist := nearestAccent(accent, dark); id != "" && dist <= 1500 {
+		return themes.FocusContrastRing(id, dark)
+	}
+	return themes.AdjustContrastRing(accent, dark)
+}
+
+func nearestAccent(accent ui.Color, dark bool) (string, int) {
+	best := ""
 	bestD := 1 << 30
 	for _, id := range themes.AccentIDs() {
 		src, ok := themes.NamedAccent(id, dark)
@@ -734,7 +969,7 @@ func matchAccentID(accent ui.Color, dark bool) string {
 			best, bestD = id, d
 		}
 	}
-	return best
+	return best, bestD
 }
 
 func accentDistance(a, b ui.Color) int {
@@ -747,7 +982,9 @@ func accentDistance(a, b ui.Color) int {
 func (a *App) ringAlpha(id uint64) float32 {
 	if a.ringID == 0 {
 		a.ringID = id
-		if a.ringSeen != id && a.paintCtx != nil {
+		// A move keeps the fade already running. Only the first appearance
+		// starts it, so the ring does not blink each time it changes place.
+		if a.ringSeen == 0 && a.paintCtx != nil {
 			a.ringAt = a.paintCtx.Now()
 		}
 	}
@@ -862,6 +1099,20 @@ func (a *App) alwaysRing(el ui.Element, radius float32) {
 	})
 }
 
+// focusedRing draws while this control itself has the keyboard, so Tab
+// from Cancel to Delete moves the ring.
+func (a *App) focusedRing(el ui.Element, radius float32) {
+	if !el.Valid() {
+		return
+	}
+	el.FocusRing(false)
+	el.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if el.Focused() && a.look.Focused {
+			a.strokeOuter(p, r, radius, el.ID())
+		}
+	})
+}
+
 func (a *App) keyboardInset(el ui.Element, radius float32) {
 	if !el.Valid() {
 		return
@@ -870,6 +1121,115 @@ func (a *App) keyboardInset(el ui.Element, radius float32) {
 	el.DrawOver(func(p *ui.Painter, r ui.Rect) {
 		if el.FocusVisible() {
 			a.strokeInset(p, r, radius, el.ID())
+		}
+	})
+}
+
+func (a *App) segmentedRing(el ui.Element) {
+	a.quietControl(el, radiusRow)
+	a.noteSettingsStop(el, false)
+}
+
+func (a *App) switchRing(el ui.Element) {
+	if !el.Valid() {
+		return
+	}
+	el.Size(32, 18).KeepFocus().FocusRing(false)
+	a.keyboardRingOnly(el, 9)
+	a.noteSettingsStop(el, false)
+}
+
+func (a *App) sliderKnobRing(el ui.Element, inset, frac float32) {
+	if !el.Valid() {
+		return
+	}
+	el.FocusRing(false)
+	el.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if !el.FocusVisible() {
+			return
+		}
+		innerW := r.W - 2*inset
+		if innerW < 1 {
+			return
+		}
+		if frac < 0 {
+			frac = 0
+		}
+		if frac > 1 {
+			frac = 1
+		}
+		const kw float32 = 16
+		knob := ui.Rect{X: r.X + inset + frac*innerW - kw/2, Y: r.Y, W: kw, H: r.H}
+		a.strokeOuter(p, knob, kw/2, el.ID())
+	})
+	a.noteSettingsStop(el, false)
+}
+
+func (a *App) stepperRing(col, up, down ui.Element) {
+	if up.Valid() {
+		up.KeepFocus().FocusRing(false)
+		a.noteSettingsStop(up, false)
+	}
+	if down.Valid() {
+		down.KeepFocus().FocusRing(false)
+		a.noteSettingsStop(down, false)
+	}
+	if !col.Valid() {
+		return
+	}
+	col.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if up.FocusVisible() || down.FocusVisible() {
+			a.strokeOuter(p, r, 5, col.ID())
+		}
+	})
+}
+
+func (a *App) swatchRing(el ui.Element) {
+	if !el.Valid() {
+		return
+	}
+	el.KeepFocus().FocusRing(false)
+	el.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if !el.FocusVisible() {
+			return
+		}
+		const offset float32 = 4
+		padded := ui.Rect{X: r.X - offset, Y: r.Y - offset, W: r.W + 2*offset, H: r.H + 2*offset}
+		paintOuterFocusRing(p, padded, 8, scaleAlpha(a.ringColor(), a.ringAlpha(el.ID())))
+	})
+	a.noteSettingsStop(el, false)
+}
+
+func (a *App) textButtonRing(el ui.Element) {
+	if !el.Valid() {
+		return
+	}
+	el.KeepFocus().FocusRing(false)
+	el.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if !el.FocusVisible() {
+			return
+		}
+		padded := ui.Rect{X: r.X - 2, Y: r.Y - 2, W: r.W + 4, H: r.H + 4}
+		a.strokeOuter(p, padded, radiusXS, el.ID())
+	})
+	a.noteSettingsStop(el, false)
+}
+
+func (a *App) settingsFieldChrome(box, input ui.Element) {
+	if input.Valid() {
+		input.FocusRing(false)
+		a.noteSettingsStop(input, true)
+	}
+	if !box.Valid() {
+		return
+	}
+	focused := input.Valid() && input.Focused()
+	if focused {
+		box.Border(1, a.look.AccentDefault)
+	}
+	box.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		if focused {
+			a.strokeOuter(p, r, radiusRow, box.ID())
 		}
 	})
 }
@@ -888,12 +1248,14 @@ func (a *App) openAcks() {
 	a.acksOpen = true
 }
 
-func (a *App) closeAcks() {
+func (a *App) closeAcks() { a.closeAcksShown(false) }
+
+func (a *App) closeAcksShown(keyboard bool) {
 	if !a.acksOpen {
 		return
 	}
 	a.acksOpen = false
-	a.popFocusReturn()
+	a.popFocusReturnShown(keyboard)
 }
 
 func (a *App) finishSidebarList(c *ui.Context, list ui.Element) {

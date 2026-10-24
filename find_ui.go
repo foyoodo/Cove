@@ -64,7 +64,9 @@ func (a *App) openFind() {
 	a.finder.settled = true
 }
 
-func (a *App) closeFind() {
+func (a *App) closeFind() { a.closeFindShown(false) }
+
+func (a *App) closeFindShown(keyboard bool) {
 	if !a.finder.open {
 		return
 	}
@@ -95,9 +97,10 @@ func (a *App) closeFind() {
 		a.returnTo = focusPlace{kind: focusMessage, elem: elem, id: a.data.ActiveID}
 		a.returnPending = a.returnDepth == 0
 		a.returnSurf = focusSurfMain
+		a.closeKeyboard = keyboard
 		return
 	}
-	a.popFocusReturn()
+	a.popFocusReturnShown(keyboard)
 }
 
 func (a *App) syncFindQuery(now time.Time) {
@@ -358,7 +361,7 @@ func (a *App) findBar(c *ui.Context, conv *Conversation) {
 					a.findCommitEnter()
 					return true
 				case k.Key == ui.KeyEscape && k.Mods == 0:
-					a.closeFind()
+					a.closeFindShown(true)
 					return true
 				}
 				return false

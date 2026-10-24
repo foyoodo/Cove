@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -171,7 +170,7 @@ type App struct {
 	newSessionItem       *mygo.MenuItem
 	composerField        ui.Element
 	composerElem         uint64
-	focusRT              unsafe.Pointer
+	focusRT              ui.FocusToken
 	searchInput          ui.Element
 	roundsText           string
 	roundsScope          string
@@ -285,6 +284,18 @@ type App struct {
 	tabSettings        ui.Element
 	tabQuotes          []ui.Element
 	tabMessages        []ui.Element
+	// ledgers keeps one focus record per window. Element ids from Settings
+	// are never compared with the main window's tree.
+	ledgers          map[uintptr]*focusLedger
+	cur              *focusLedger
+	windowToken      uintptr
+	settingsToken    uintptr
+	popupEpoch       uint64
+	closeKeyboard    bool
+	imeHandoff       bool
+	embeddedSettings bool
+	settingsChain    []tabHit
+	settingsTabBuf   []tabHit
 	// streamCaret draws the tide caret on the paragraph still being written.
 	streamCaret bool
 	// streamLines are the finished lines of the paragraph still being
@@ -841,6 +852,18 @@ func (a *App) beginRename() {
 	// A title that arrives after the field opens would replace the name
 	// the user is typing. Drop the in-flight request instead.
 	a.cancelTitle(conv.ID, false)
+	// Rename returns to the sidebar row when the keyboard was in the
+	// sidebar, and to the composer otherwise. A More menu or the search
+	// field in between does not become the restore target.
+	place := a.settled
+	if a.returnDepth > 0 && a.returnTo.kind == focusSidebar {
+		place = a.returnTo
+	}
+	if place.kind != focusSidebar {
+		place = focusPlace{kind: focusComposer, id: conv.ID}
+	}
+	a.abandonFocusReturn()
+	a.settled = place
 	a.pushFocusReturn()
 	a.renameSelect = true
 	a.renameText = conv.Title
@@ -1794,14 +1817,14 @@ func (a *App) applyEdit() {
 	conv := a.conversation(a.edit.convID)
 	if conv == nil {
 		a.edit = messageEdit{}
-		a.confirmKind = ""
+		a.releaseConfirmRecord()
 		return
 	}
 	text := strings.TrimSpace(a.edit.text)
 	msgID := a.edit.msgID
 	quotes := append([]Quote(nil), a.edit.quotes...)
 	a.edit = messageEdit{}
-	a.confirmKind = ""
+	a.releaseConfirmRecord()
 	if text == "" && len(quotes) == 0 {
 		return
 	}

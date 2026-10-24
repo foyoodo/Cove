@@ -67,7 +67,14 @@ func (a *App) view(c *ui.Context) {
 	a.paintCtx = c
 	a.beginRings()
 	a.resetTabTargets()
+	a.resetSettingsTabs()
 	a.fullKeyboard = c.Preferences().FullKeyboardAccess
+	embedded := a.settingsOpen && a.prefs == nil
+	if a.embeddedSettings && !embedded {
+		a.dropSettingsWindow()
+	}
+	a.embeddedSettings = embedded
+	a.bindLedger(c, embedded)
 	a.bindSelectionHandoff(c)
 	// modelMenuSeen is set by the composer menu while its popup is open.
 	// A pass that builds no open menu drops the chat recorded for it, so
@@ -127,12 +134,16 @@ func (a *App) view(c *ui.Context) {
 		a.statesBoard(c)
 		a.veilScrollbar(c)
 		a.finishQuotePointer()
+		a.sweepPopovers()
+		a.storeLedger()
 		return
 	}
 	if a.shotPalette {
 		a.paletteBoard(c)
 		a.veilScrollbar(c)
 		a.finishQuotePointer()
+		a.sweepPopovers()
+		a.storeLedger()
 		return
 	}
 	winW, _ := c.Size()
@@ -144,8 +155,8 @@ func (a *App) view(c *ui.Context) {
 		a.veilScrollbar(c)
 		a.settleComposerFocus()
 		a.finishQuotePointer()
-		a.finishFocusReturn(c, focusSurfSettings)
-		a.noteSettledFocus(c)
+		a.finishSettingsTabs()
+		a.endFocusFrame(c, focusSurfSettings)
 		return
 	}
 	if !a.openedFocus {
@@ -176,8 +187,7 @@ func (a *App) view(c *ui.Context) {
 	a.requestModal(c)
 	a.veilScrollbar(c)
 	a.assembleTabs()
-	a.finishFocusReturn(c, focusSurfMain)
-	a.noteSettledFocus(c)
+	a.endFocusFrame(c, focusSurfMain)
 	a.noteComposerCaret()
 	// A request the composer did not take (no field, or a sheet opened
 	// over it in this frame) does not fire on a later frame.
@@ -211,17 +221,17 @@ func (a *App) shortcuts(c *ui.Context) {
 	a.finder.enterHandled = false
 	if a.acksOpen {
 		if c.Shortcut(0, ui.KeyEscape) {
-			a.closeAcks()
+			a.closeAcksShown(true)
 		}
 		return
 	}
 	if a.confirmKind != "" {
 		if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(0, ui.KeyEnter) {
-			a.dismissConfirm()
+			a.dismissConfirm(true)
 			a.suppressEditEscape = true
 		}
 		if c.Shortcut(ui.Cmd, ui.KeyBackspace) {
-			a.acceptConfirm()
+			a.acceptConfirm(true)
 		}
 		return
 	}
@@ -252,7 +262,7 @@ func (a *App) shortcuts(c *ui.Context) {
 			a.findStep(1, c.Now())
 		}
 		if c.Shortcut(0, ui.KeyEscape) {
-			a.closeFind()
+			a.closeFindShown(true)
 			a.suppressEditEscape = true
 		}
 	}
@@ -298,7 +308,24 @@ func (a *App) shortcuts(c *ui.Context) {
 		a.settled.kind == focusMessage && c.Shortcut(0, ui.KeyEscape) {
 		a.focusComposer()
 	}
-	if !a.renameOpen && !a.modalOpen && !a.requestOpen && !a.acksOpen && !a.settingsOpen {
+	// A popup keeps Tab. Moving focus out from under an open menu leaves
+	// it up, and Escape can no longer close it.
+	if a.popupOpen() {
+		c.Shortcut(0, ui.KeyTab)
+		c.Shortcut(ui.Shift, ui.KeyTab)
+		return
+	}
+	settingsHere := a.settingsOpen && a.prefs == nil
+	if !a.renameOpen && !a.modalOpen && !a.requestOpen && !a.acksOpen && (settingsHere || !a.settingsOpen) {
+		if settingsHere {
+			if c.Shortcut(0, ui.KeyTab) {
+				a.focusSettingsTab(c, false)
+			}
+			if c.Shortcut(ui.Shift, ui.KeyTab) {
+				a.focusSettingsTab(c, true)
+			}
+			return
+		}
 		if c.Shortcut(0, ui.KeyTab) {
 			a.focusTab(c, false)
 		}
@@ -342,6 +369,7 @@ func (a *App) sidebar(c *ui.Context) {
 		}
 		a.syncSideIndex()
 		a.side.Selected = &a.sideIndex
+		a.side.QuietSelection = true
 		list := ui.List(c, &a.side, len(rows), func(i int) {
 			if i < 0 || i >= len(a.sideRows) {
 				return
@@ -1929,9 +1957,18 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 						if input.Pressed() {
 							a.quoteBarOpen = false
 						}
-						if editing {
+						switch {
+						case editing:
 							input.Disabled(true)
-						} else if a.focusComposerID == conv.ID || (a.tabWant != 0 && input.ID() == a.tabWant) {
+						case a.imeHandoff && conv.ID == a.data.ActiveID:
+							// The key that moved focus here is already with the
+							// input method. Focusing again, or placing the caret,
+							// would commit or drop that composition.
+							a.imeHandoff = false
+							if a.focusComposerID == conv.ID {
+								a.focusComposerID = ""
+							}
+						case a.focusComposerID == conv.ID || (a.tabWant != 0 && input.ID() == a.tabWant):
 							// One frame. Calling Focus every frame would pin the caret
 							// here and the user could not tab away.
 							input.Focus()
@@ -2271,7 +2308,8 @@ func (a *App) roundButton(c *ui.Context, label string, glyph *ui.SVG, primary, d
 
 func (a *App) renameModal(c *ui.Context) {
 	wasOpen := a.renameOpen
-	ui.Modal(c, &a.renameOpen, func() {
+	keyClose := false
+	panel := ui.Modal(c, &a.renameOpen, func() {
 		ui.Column(c).Width(380).Gap(12).Children(func() {
 			ui.Text(c, "Rename chat").FontSize(18).Bold()
 			in := ui.TextInput(c, &a.renameText).Label("Name").AutoFocus().FocusRing(false)
@@ -2281,6 +2319,7 @@ func (a *App) renameModal(c *ui.Context) {
 			}
 			a.fieldRing(in, radiusRow)
 			if in.Submitted() {
+				keyClose = true
 				a.commitRename()
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
@@ -2294,12 +2333,16 @@ func (a *App) renameModal(c *ui.Context) {
 		})
 	})
 	if wasOpen && !a.renameOpen {
-		a.popFocusReturn()
+		if panel.Valid() && panel.DismissedByKey() {
+			keyClose = true
+		}
+		a.popFocusReturnShown(keyClose)
 	}
 }
 
 func (a *App) settingsModal(c *ui.Context) {
 	wasOpen := a.modalOpen
+	keyClose := false
 	p := a.look
 	_, winH := c.Size()
 	maxH := winH - 96
@@ -2309,7 +2352,7 @@ func (a *App) settingsModal(c *ui.Context) {
 	if maxH < 280 {
 		maxH = 280
 	}
-	ui.DialogBase(c, &a.modalOpen, func(back, panel ui.Element) {
+	panel := ui.DialogBase(c, &a.modalOpen, func(back, panel ui.Element) {
 		back.Background(p.LayerScrim)
 		back.Justify(ui.Start).AlignItems(ui.Center).Padding(64, 20, 16, 20)
 		panel.Padding(0).Gap(0).Width(560).MaxHeight(maxH).Radius(radiusComposer).Background(p.LayerSheet).Border(0.5, p.LayerOverlayBorder).Clip()
@@ -2352,7 +2395,10 @@ func (a *App) settingsModal(c *ui.Context) {
 	})
 	if wasOpen && !a.modalOpen {
 		a.dropDrafts()
-		a.popFocusReturn()
+		if panel.Valid() && panel.DismissedByKey() {
+			keyClose = true
+		}
+		a.popFocusReturnShown(keyClose)
 	}
 }
 
@@ -2385,6 +2431,8 @@ func (a *App) sheetButton(c *ui.Context, label string, primary bool) ui.Element 
 	b.Children(func() {
 		controlText(c, label, 13, 0, weight, fg)
 	})
+	a.keyboardRingOnly(b, radiusRow)
+	a.noteSettingsStop(b, false)
 	return b
 }
 
@@ -2457,8 +2505,8 @@ func (a *App) configForm(c *ui.Context) {
 			if !a.formTempOn {
 				val.Opacity(0.4)
 			}
-			sw := ui.Switch(c, &a.formTempOn).Label("Send temperature").Size(32, 18).KeepFocus().FocusRing(false)
-			a.keyboardRingOnly(sw, radiusPill)
+			sw := ui.Switch(c, &a.formTempOn).Label("Send temperature")
+			a.switchRing(sw)
 			if !p.Focused {
 				sw.Opacity(0.72)
 			}
@@ -2500,6 +2548,7 @@ func (a *App) configForm(c *ui.Context) {
 					})
 				}
 			})
+			a.segmentedRing(track)
 			*el = track
 			if reasoningUnsupported(hintCfg) {
 				track.Disabled(true)
@@ -2622,7 +2671,7 @@ func (a *App) settingsLineColor(c *ui.Context, label, hint string, hintColor ui.
 			var el ui.Element
 			// The label sits on the row's leading edge. A growing button
 			// centers its text by default, which reads as a form.
-			lab := ui.ButtonBase(c).Grow(1).MinWidth(0).MinHeight(20).Padding(0).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorDefault)
+			lab := ui.ButtonBase(c).Grow(1).MinWidth(0).MinHeight(20).Padding(0).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorDefault).OmitTab()
 			if top {
 				lab.AlignItems(ui.Start).Padding(3, 0, 0, 0)
 			}
@@ -2653,7 +2702,9 @@ func (a *App) settingsLineColor(c *ui.Context, label, hint string, hintColor ui.
 
 func (a *App) fieldBox(c *ui.Context, el ui.Element) ui.Element {
 	p := a.look
-	return el.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder)
+	el = el.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder)
+	a.settingsFieldChrome(el, el)
+	return el
 }
 
 // lineField is a 22pt settings field whose 13pt text is centered. The
@@ -2666,6 +2717,7 @@ func (a *App) lineField(c *ui.Context, value *string, placeholder, font string) 
 	}
 	in.Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).FocusRing(false)
 	paintPlaceholder(c, in, p.TextTertiary)
+	a.settingsFieldChrome(in, in)
 	return in
 }
 
@@ -2714,10 +2766,10 @@ func (a *App) providerSelect(c *ui.Context) ui.Element {
 func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 	p := a.look
 	shown := strconv.FormatFloat(a.formMax, 'f', 0, 64)
-	var focus ui.Element
+	var focus, field, col, up, down ui.Element
 	row := ui.Row(c).Gap(4).AlignItems(ui.Center)
 	row.Children(func() {
-		field := ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center)
+		field = ui.Row(c).Width(80).Height(22).Padding(0, 7).Radius(radiusRow).Background(p.ControlField).Border(1, p.ControlFieldBorder).AlignItems(ui.Center)
 		field.Children(func() {
 			in := ui.TextInputBase(c, &shown).Font("ui-monospace").FontSize(12).LineHeight(16.0/12.0).Grow(1).MinWidth(0).Padding(3, 0)
 			in.Border(0, ui.Transparent).Background(ui.Transparent).FocusRing(false)
@@ -2729,15 +2781,16 @@ func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 			}
 		})
 		// One control: the two halves share the rounded rect.
-		ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder).Clip().Shrink(0).Children(func() {
-			up := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
+		col = ui.Column(c).Width(13).Height(22).Radius(5).Background(p.ControlBg).Border(0.5, p.ControlBorder).Shrink(0)
+		col.Children(func() {
+			up = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Increase").Cursor(ui.CursorPointer)
 			up.Children(func() {
 				ui.Icon(c, iconChevron).Size(8, 8).Rotate(180).TextColor(p.TextSecondary)
 			})
 			if up.Clicked() {
 				a.formMax = math.Min(200000, a.formMax+1)
 			}
-			down := ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
+			down = ui.ButtonBase(c).Height(11).FillWidth().Center().Label("Decrease").Cursor(ui.CursorPointer)
 			down.Children(func() {
 				ui.Icon(c, iconChevron).Size(8, 8).TextColor(p.TextSecondary)
 			})
@@ -2746,6 +2799,8 @@ func (a *App) maxTokenStepper(c *ui.Context) ui.Element {
 			}
 		})
 	})
+	a.settingsFieldChrome(field, focus)
+	a.stepperRing(col, up, down)
 	if focus.Valid() {
 		return focus
 	}
@@ -2794,6 +2849,11 @@ func (a *App) temperatureSlider(c *ui.Context) ui.Element {
 		painter.Fill(knob, p.ControlKnob, kw/2)
 		painter.Stroke(knob, p.ControlBorder, kw/2, 0.5)
 	})
+	frac := float32(0)
+	if a.formTemp > 0 {
+		frac = float32(a.formTemp / 2)
+	}
+	a.sliderKnobRing(s, inset, frac)
 	return s
 }
 
@@ -2826,6 +2886,7 @@ func (a *App) appearanceControl(c *ui.Context) ui.Element {
 	if track.Changed() {
 		a.setAppearance(appearanceFromIndex(idx), c.Now())
 	}
+	a.segmentedRing(track)
 	return track
 }
 
@@ -2835,6 +2896,7 @@ func (a *App) lastRequestRow(c *ui.Context) {
 	preview := ui.Text(c, full).Font("ui-monospace").FontSize(12).TextColor(p.TextSecondary).MaxLines(4).Ellipsis("…").FillWidth().MinWidth(0)
 	a.tip(c, preview, full)
 	btn := ui.ButtonBase(c).Height(22).Gap(1).Padding(0).AlignItems(ui.Center).Label("View JSON").Cursor(ui.CursorPointer).Shrink(0)
+	a.textButtonRing(btn)
 	btn.Children(func() {
 		controlText(c, "View JSON", 12, 0, 500, p.TextLink)
 		ui.Icon(c, iconChevronRight).Size(11, 11).TextColor(p.TextLink)
@@ -2883,7 +2945,7 @@ func (a *App) prefsView(c *ui.Context) {
 func (a *App) requestModal(c *ui.Context) {
 	wasOpen := a.requestOpen
 	t := c.Theme()
-	ui.Modal(c, &a.requestOpen, func() {
+	panel := ui.Modal(c, &a.requestOpen, func() {
 		ui.Column(c).Width(560).Gap(12).Children(func() {
 			ui.Text(c, "Last request").FontSize(18).Bold()
 			ui.Text(c, "The full JSON of this chat's most recent request. The API key stays in the header.").TextColor(t.TextMuted)
@@ -2898,7 +2960,7 @@ func (a *App) requestModal(c *ui.Context) {
 		})
 	})
 	if wasOpen && !a.requestOpen {
-		a.popFocusReturn()
+		a.popFocusReturnShown(panel.Valid() && panel.DismissedByKey())
 	}
 }
 

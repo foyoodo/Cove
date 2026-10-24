@@ -447,6 +447,32 @@ func (t *Tester) Find(s string) (Rect, bool) {
 	return Rect{}, false
 }
 
+// FindAll returns every box labeled or showing s, in paint order.
+func (t *Tester) FindAll(s string) []Rect {
+	var out []Rect
+	for _, n := range t.rt.labels {
+		if n.text == s {
+			out = append(out, n.r)
+		}
+	}
+	return out
+}
+
+// FocusedRect is the box of the focused element labeled s. A label on a
+// parent does not match; Focused walks ancestors for that.
+func (t *Tester) FocusedRect(s string) (Rect, bool) {
+	id := t.rt.focused
+	if id == 0 {
+		return Rect{}, false
+	}
+	for _, n := range t.rt.labels {
+		if n.text == s && n.id == id {
+			return n.r, true
+		}
+	}
+	return Rect{}, false
+}
+
 // Texts returns the texts of the last frame, in order.
 func (t *Tester) Texts() []string {
 	var out []string
