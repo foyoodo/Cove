@@ -100,8 +100,34 @@ jobs:
           fc-match sans-serif
 
       - name: Test
-        # The main package takes several minutes; the default 10m limit is close.
-        run: go test -timeout 20m ./...
+        # -v prints every --- SKIP line. The summary counts pass, fail, and
+        # skip, including when the suite fails. The main package takes
+        # several minutes; the default 10m limit is close.
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/go-test.txt"
+          set +e
+          go test -timeout 20m -v ./... | tee "$log"
+          code=${PIPESTATUS[0]}
+          set -e
+          python3 - "$log" <<'PY'
+          import sys
+          passed = failed = 0
+          skips = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("--- PASS:"):
+                  passed += 1
+              elif line.startswith("--- FAIL:"):
+                  failed += 1
+              elif line.startswith("--- SKIP:"):
+                  rest = line[len("--- SKIP:"):].strip()
+                  skips.append(rest.split(" ", 1)[0])
+          total = passed + failed + len(skips)
+          print(f"TEST-SUMMARY: pass={passed} fail={failed} skip={len(skips)} total={total}")
+          for name in skips:
+              print(f"TEST-SKIP: {name}")
+          PY
+          exit "$code"
 
       - name: Build Cove.app for darwin/arm64 and darwin/universal
         run: CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal

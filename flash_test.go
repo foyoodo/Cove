@@ -460,6 +460,22 @@ func stepFrame(tt *ui.Tester) {
 	}
 }
 
+func TestFrameTimeIsNotAfterTheClock(t *testing.T) {
+	tt := ui.NewTester(func(*ui.Context) {}, 100, 100)
+	tt.Frame()
+	at := tt.FrameTime()
+	if at.IsZero() {
+		t.Fatal("frame time is zero")
+	}
+	if at.After(tt.Now()) {
+		t.Fatalf("frame %s is after now %s", at, tt.Now())
+	}
+	tt.Advance(16 * time.Millisecond)
+	if tt.FrameTime().After(tt.Now()) {
+		t.Fatalf("after advance, frame %s is after now %s", tt.FrameTime(), tt.Now())
+	}
+}
+
 func titlePixel(tt *ui.Tester, x, y int) [3]byte {
 	c := tt.Image().RGBAAt(x, y)
 	return [3]byte{c.R, c.G, c.B}
@@ -553,10 +569,13 @@ func (w *crossfadeWalk) check() {
 	}
 
 	if w.a.fadeLive {
-		u := clockU(w.tt.Now(), w.a.backdropFadeAt, motionTheme)
+		// The painted alpha used the frame's own time. Now() is the end
+		// of Advance, which can already be past the end of the swap.
+		now := w.tt.FrameTime()
+		u := clockU(now, w.a.backdropFadeAt, motionTheme)
 		swapU := float32(0)
 		if w.a.fullBM != nil && !w.a.swapAt.IsZero() {
-			swapU = clockU(w.tt.Now(), w.a.swapAt, w.a.swapDur)
+			swapU = clockU(now, w.a.swapAt, w.a.swapDur)
 		}
 		if fr.previewID != 0 {
 			// The preview stays at the clock while a base is drawn, including
