@@ -224,7 +224,7 @@ func (a *App) bindPopover(c *ui.Context, key string, anchor ui.Element, spec pop
 		}
 	}
 	if st.open {
-		a.paintPopover(c, anchor, st, spec)
+		a.paintPopover(c, anchor, st, spec, key)
 	}
 	// Settings menus are tab stops only with Full Keyboard Access. A click
 	// still opens the menu without moving the keyboard.
@@ -281,7 +281,7 @@ func (a *App) commitPopover(st *popoverState, spec popSpec, id string, keyboard 
 	}
 }
 
-func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, spec popSpec) {
+func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, spec popSpec, key string) {
 	a.notePopover(st)
 	w, h := c.Size()
 	if !appWindowFocused(c) || (st.winW > 0 && (w != st.winW || h != st.winH)) {
@@ -384,11 +384,12 @@ func (a *App) paintPopover(c *ui.Context, anchor ui.Element, st *popoverState, s
 	var searchEl ui.Element
 	var hotEl ui.Element
 	ui.Overlay(c, func() {
-		// Keyed so a tooltip overlay appearing or going does not change this
-		// element's id. A keyboard-opened menu shows the anchor's tip; the
-		// first press hides that tip, and an unkeyed backdrop would be a
-		// new element by the time the button comes up, dropping the click.
-		back := ui.Box(c.Key("menu-back-" + spec.Name)).Absolute().Left(0).Top(0).Right(0).Bottom(0)
+		// Keyed on this popover's own key, so two menus that share a name
+		// stay distinct. The key also stays put when a tooltip overlay
+		// appears or goes. A keyboard-opened menu shows the anchor's tip;
+		// the first press hides that tip, and an unkeyed backdrop would be
+		// a new element by the time the button comes up, dropping the click.
+		back := ui.Box(c.Key("menu-back-" + key)).Absolute().Left(0).Top(0).Right(0).Bottom(0)
 		if back.Clicked() {
 			a.dismissPopover(st, c.Now(), false, false)
 		}

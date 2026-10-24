@@ -2033,8 +2033,12 @@ func (a *App) composer(c *ui.Context, conv *Conversation) {
 						ui.Row(c).FillWidth().Height(composerToolH).Gap(4).AlignItems(ui.Center).Children(func() {
 							a.tip(c, a.modelMenu(c, conv, "composer"), "Model").MinWidth(0)
 							effort := a.effortMenu(c, conv, "composer").Shrink(0)
-							a.tabEffort = effort
-							a.takeTab(c, effort)
+							// An unsupported chip stays enabled so its hover
+							// tip can show. It is not a Tab stop.
+							if !reasoningUnsupported(conv.Config) {
+								a.tabEffort = effort
+								a.takeTab(c, effort)
+							}
 							session := a.newSessionButton(c)
 							a.tabSession = session
 							a.takeTab(c, session)
@@ -2235,9 +2239,7 @@ func (a *App) effortMenu(c *ui.Context, conv *Conversation, slot string) ui.Elem
 	fg := p.TextSecondary
 	switch {
 	case unsupported:
-		// Disabled drops the chip from Tab. Disabled paint halves
-		// opacity, so 0.9 keeps the unsupported chip at 0.45.
-		b.Disabled(true).Opacity(0.9)
+		b.Opacity(0.45)
 	case b.Pressed():
 		b.Background(p.FillPressed)
 		fg = p.TextPrimary
@@ -3239,11 +3241,10 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	}
 	slot := a.hScrollSlot(a.hScrollKey("code", b.Index))
 	edge := scrollEdge(p.CodeBg, a.cardFlat())
-	// Clip the header to the block's rounded corners. The right padding
-	// keeps the Copy ring, which grows 3pt outside the button, inside
-	// that clip instead of under the corner.
+	// Clip the header to the block's rounded corners. 7pt of right
+	// padding fits the Copy ring, which grows 3pt outside the button.
 	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).Clip().AlignSelf(ui.Stretch).Label("code block").Children(func() {
-		ui.Row(c).Height(28).Padding(0, 12, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
+		ui.Row(c).Height(28).Padding(0, 7, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
 			ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
 			ui.Spacer(c)
 			copy := b.CopyButton(c)

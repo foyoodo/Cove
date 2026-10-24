@@ -668,6 +668,7 @@ func TestFocusRingShots(t *testing.T) {
 		tt.Frame()
 		save("inactive-"+suffix+".png", tt)
 
+		shotUnsupportedReasoning(t, dir, suffix, dark)
 		shotSettingsRings(t, dir, suffix, dark)
 		shotQuoteRing(t, dir, suffix)
 		shotDialogRing(t, dir, suffix)
@@ -842,6 +843,36 @@ func writeCrop(t *testing.T, dir, name string, tt *ui.Tester, label string, r ui
 		t.Fatalf("%s crop of %q is empty at %+v", name, label, r)
 	}
 	writeFocusPNG(t, filepath.Join(dir, name), img)
+}
+
+func shotUnsupportedReasoning(t *testing.T, dir, suffix string, dark bool) {
+	t.Helper()
+	_, tt := focusChats(t)
+	tt.SetDark(dark)
+	tt.Frame()
+	chip, ok := tt.Find("Reasoning: Default")
+	if !ok {
+		t.Fatal("unsupported reasoning chip")
+	}
+	// A keyboard tip from the same instant wins the tie. Step the clock
+	// so this hover is the later one, then rest past the tooltip delay.
+	tt.Advance(time.Millisecond)
+	tt.Move(chip.X+chip.W/2, chip.Y+chip.H/2)
+	tt.Advance(1500 * time.Millisecond)
+	tt.Frame()
+	const tip = "This model doesn't support reasoning effort."
+	if !tt.HasText(tip) {
+		t.Fatalf("unsupported reasoning tooltip missing: %q", tt.Texts())
+	}
+	tipR, ok := tt.Find(tip)
+	if !ok {
+		t.Fatalf("tooltip rect missing: %q", tt.Texts())
+	}
+	chip, ok = tt.Find("Reasoning: Default")
+	if !ok {
+		t.Fatal("unsupported reasoning chip left after the tooltip")
+	}
+	writeCrop(t, dir, "reasoning-unsupported-"+suffix+".png", tt, tip, unionRect(chip, tipR), 16)
 }
 
 func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {

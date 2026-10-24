@@ -916,6 +916,21 @@ func TestSearchEscapeAfterSettingsKeepsSidebar(t *testing.T) {
 
 func TestUnsupportedReasoningIsNotATabStop(t *testing.T) {
 	_, tt := focusChats(t)
+	chip, ok := tt.Find("Reasoning: Default")
+	if !ok {
+		t.Fatal("unsupported reasoning chip was removed")
+	}
+	// A keyboard tip from the same instant wins the tie. Step the clock
+	// so this hover is the later one, then rest past the tooltip delay.
+	tt.Advance(time.Millisecond)
+	tt.Move(chip.X+chip.W/2, chip.Y+chip.H/2)
+	tt.Advance(1500 * time.Millisecond)
+	tt.Frame()
+	if !tt.HasText("This model doesn't support reasoning effort.") {
+		t.Fatalf("unsupported reasoning tooltip missing: %q", tt.Texts())
+	}
+	tt.Move(8, 8)
+
 	enableFullKeyboard(tt)
 	focusDraft(t, tt)
 	if !focusUntil(t, tt, "Model gpt-4o-mini", 8) {
@@ -927,9 +942,6 @@ func TestUnsupportedReasoningIsNotATabStop(t *testing.T) {
 	}
 	if !tt.Focused("New Session") {
 		t.Fatal("Tab did not skip the unsupported reasoning chip")
-	}
-	if _, ok := tt.Find("Reasoning: Default"); !ok {
-		t.Fatal("unsupported reasoning chip was removed")
 	}
 }
 
