@@ -272,6 +272,12 @@ func (t *Tester) runLater() {
 // still until Advance moves it.
 func (t *Tester) Now() time.Time { return t.now }
 
+// FrameTime is when the last frame was painted. Advance runs each frame
+// at its due time and then moves Now to the end of the step, so FrameTime
+// can be earlier than Now. A test that checks what that frame drew should
+// read the clock here.
+func (t *Tester) FrameTime() time.Time { return t.frameAt }
+
 // Advance moves the Tester's clock on by d, running the frames due
 // meanwhile at their times: one each refresh while something moves, and
 // those of After and Painter.After when they come due. An animation of
