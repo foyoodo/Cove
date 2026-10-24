@@ -180,6 +180,12 @@ type Conversation struct {
 	// was deleted: Switched to <default> — “<name>” was removed.
 	// It is cleared by the × or by the next send in this chat.
 	SwitchNote string `json:"-"`
+	// TitleSource is temp, auto, or manual. It lives in the chat header.
+	// An empty value is a chat from before titles were generated.
+	TitleSource string `json:"-"`
+	// TitleGenerated is true once the one automatic title attempt has
+	// started, whether or not it produced a title. It is not cleared.
+	TitleGenerated bool `json:"-"`
 }
 
 // storeVersion is the schema written by this build. Older single-file
@@ -301,6 +307,10 @@ type StoreData struct {
 	// MaxRounds is the limit copied onto a new chat. 0 is unlimited.
 	// Chats already on disk keep their own value.
 	MaxRounds int `json:"maxRounds,omitempty"`
+	// AutoTitles asks for a title after the first reply. Missing on an
+	// older settings file means on. TitleModel nil is Same as Chat.
+	AutoTitles bool        `json:"autoTitles"`
+	TitleModel *TitleModel `json:"titleModel,omitempty"`
 	// pendingOptIn is set while loading a store from before providers
 	// were opt-in. It is not written. adoptProviders clears it after
 	// the one-time prune, once keys can be seen.
@@ -365,7 +375,15 @@ func defaultData() StoreData {
 		ShowReasoning:   true,
 		RestoreLast:     true,
 		KeepLastRequest: true,
+		AutoTitles:      true,
 	}
+}
+
+// TitleModel is the model that writes chat titles. Nil means each chat
+// uses its own model.
+type TitleModel struct {
+	ProviderID string `json:"providerId"`
+	ModelID    string `json:"modelId"`
 }
 
 func providerNames() []string {

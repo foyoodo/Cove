@@ -314,6 +314,24 @@ type App struct {
 	// hScrollMsg is the message whose markdown is being built.
 	hScrolls   map[string]*hScrollSlot
 	hScrollMsg string
+
+	// Title generation. Jobs run off the frame. Fades and failures are
+	// drawn on the next frame. sideKeep holds sidebar rows that matched
+	// the current search so a new title does not drop them.
+	titleJobs   map[string]*titleJob
+	titleGens   map[string]int
+	titleFades  map[string]titleFade
+	titleFails  map[string]time.Time
+	windowTitle string
+	sideQuery   string
+	sideKeep    map[string]bool
+	sideClock   time.Time
+
+	// titleAsync runs a title request on a goroutine without a window.
+	// uiSync, when set, receives the callback that a window would run on
+	// the main thread. Both stay unset in the app.
+	titleAsync bool
+	uiSync     func(func())
 }
 
 // NewApp loads conversations from path. A missing file starts empty. A
@@ -348,6 +366,9 @@ func openApp(path string, keys keyring) *App {
 	a.assumeStoredKeys()
 	a.migrateSecrets()
 	a.adoptProviders()
+	if openAppHook != nil {
+		openAppHook(a)
+	}
 	return a
 }
 
@@ -638,6 +659,7 @@ func (a *App) discardUntouchedExcept(keep string) {
 // persistForExit drops empty new chats and writes the file. Quit and
 // closing the window both use it, so an untouched chat is not left on disk.
 func (a *App) persistForExit() {
+	a.cancelAllTitles()
 	a.flushProviderEdits(time.Now())
 	a.cancelEdit()
 	a.nameKeptDrafts()
@@ -651,6 +673,9 @@ func (a *App) nameKeptDrafts() {
 	for i := range a.data.Conversations {
 		c := &a.data.Conversations[i]
 		if len(c.Messages) > 0 || strings.TrimSpace(c.Draft) == "" {
+			continue
+		}
+		if c.TitleSource == titleSourceManual {
 			continue
 		}
 		c.Title = draftTitle(c.Draft)
@@ -786,6 +811,9 @@ func (a *App) beginRename() {
 	if conv == nil {
 		return
 	}
+	// A title that arrives after the field opens would replace the name
+	// the user is typing. Drop the in-flight request instead.
+	a.cancelTitle(conv.ID, false)
 	a.renameText = conv.Title
 	a.renameOpen = true
 }
@@ -800,7 +828,9 @@ func (a *App) commitRename() {
 	if title == "" {
 		title = newChatTitle
 	}
+	a.cancelTitle(conv.ID, false)
 	conv.Title = title
+	conv.TitleSource = titleSourceManual
 	a.touch(conv)
 	a.renameOpen = false
 	a.save()
@@ -826,6 +856,7 @@ func (a *App) askDelete() {
 }
 
 func (a *App) deleteConversation(id string) {
+	a.dropTitleState(id)
 	if a.isStreaming(id) {
 		a.stopChat(id)
 	}
@@ -1219,12 +1250,18 @@ func (a *App) send(text string) bool {
 	}
 	conv.SwitchNote = ""
 	a.addProviderNote = ""
-	if conv.Title == newChatTitle || strings.TrimSpace(conv.Title) == "" {
+	if conv.TitleSource != titleSourceManual && !hasUserMessage(conv) {
 		titleSrc := text
-		if titleSrc == "" && len(conv.DraftQuotes) > 0 {
+		if strings.TrimSpace(titleSrc) == "" && len(conv.DraftQuotes) > 0 {
 			titleSrc = conv.DraftQuotes[0].Text
 		}
-		conv.Title = titleFrom(titleSrc)
+		// temp even when the visible title stays "New Chat", so the one
+		// automatic request still runs. A legacy chat already has messages
+		// and does not enter this branch.
+		conv.TitleSource = titleSourceTemp
+		if title := temporaryTitle(titleSrc); title != newChatTitle {
+			conv.Title = title
+		}
 	}
 	quotes := append([]Quote(nil), conv.DraftQuotes...)
 	conv.DraftQuotes = nil
@@ -1287,7 +1324,7 @@ func (a *App) startReply(conv *Conversation) {
 			m.Error = explainAPIError(err)
 		}
 		a.noteProviderAuth(convID, err)
-		a.saveSync()
+		a.finishReplyTitle(convID)
 	}
 	if bodyErr != nil {
 		fail(bodyErr)
@@ -1458,7 +1495,21 @@ func (a *App) finishReply(convID, msgID string, gen int, text, thought string, e
 			a.announce = "Reply ready"
 		}
 	}
+	a.finishReplyTitle(convID)
+}
+
+// finishReplyTitle records the one automatic attempt on the save that
+// already ends the reply, then starts the request. A second save here
+// would run on the UI thread for every first reply.
+func (a *App) finishReplyTitle(convID string) {
+	armed := a.markAutoTitle(convID)
 	a.saveSync()
+	if !armed {
+		return
+	}
+	if conv := a.conversation(convID); conv != nil {
+		a.startTitle(conv, false, false)
+	}
 }
 
 // applyStream copies a batched delta onto the message when gen is still current.
@@ -1757,6 +1808,10 @@ func (a *App) launch(fn func()) {
 func (a *App) ui(fn func()) {
 	if a.win != nil {
 		a.win.Update(fn)
+		return
+	}
+	if a.uiSync != nil {
+		a.uiSync(fn)
 		return
 	}
 	fn()

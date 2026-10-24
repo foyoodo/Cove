@@ -102,27 +102,28 @@ type popGeom struct {
 }
 
 type popoverState struct {
-	open          bool
-	wasOpen       bool
-	query         string
-	sig           string
-	hi            int
-	needScroll    bool
-	scroll        ui.ScrollState
-	page          int
-	winW, winH    float32
-	px, py        float32
-	havePointer   bool
-	geoms         []popGeom
-	typeBuf       string
-	typeAt        time.Time
-	focusComposer bool
-	focusMoved    bool
-	activate      bool
-	closing       bool
-	animAt        time.Time
-	announced     bool
-	currentID     string
+	open           bool
+	wasOpen        bool
+	query          string
+	sig            string
+	hi             int
+	needScroll     bool
+	scroll         ui.ScrollState
+	page           int
+	winW, winH     float32
+	px, py         float32
+	havePointer    bool
+	pointerPending bool
+	geoms          []popGeom
+	typeBuf        string
+	typeAt         time.Time
+	focusComposer  bool
+	focusMoved     bool
+	activate       bool
+	closing        bool
+	animAt         time.Time
+	announced      bool
+	currentID      string
 	// keyboardOpen is set when Space, Return, or Down on the focused
 	// anchor opens the menu. A pointer click leaves it false.
 	keyboardOpen bool
@@ -550,20 +551,31 @@ func (a *App) popoverKeys(c *ui.Context, anchor ui.Element, st *popoverState, se
 }
 
 func (a *App) popoverPointerMove(back ui.Element, st *popoverState, n int) {
-	x, y, over := back.PointerPosition()
+	// PointerPosition is local to the full-window back. Row boxes are
+	// window DIPs. The first sample is only a baseline: opening keeps the
+	// current item highlighted until the pointer actually moves (SPEC
+	// §11.3.4). That sample has to be recorded even when the back does
+	// not yet contain the pointer, or the move itself is mistaken for
+	// the baseline and the highlight never follows.
+	lx, ly, over := back.PointerPosition()
+	box := back.Bounds()
+	x, y := box.X+lx, box.Y+ly
 	if !st.havePointer {
+		st.px, st.py, st.havePointer = x, y, true
+		return
+	}
+	if x != st.px || y != st.py {
 		st.px, st.py = x, y
-		st.havePointer = true
+		st.pointerPending = true
+	}
+	if !over || !st.pointerPending {
 		return
 	}
-	if x == st.px && y == st.py {
-		return
-	}
-	st.px, st.py = x, y
-	if !over {
-		return
-	}
+	ready := false
 	for _, g := range st.geoms {
+		if g.r.W > 0 && g.r.H > 0 {
+			ready = true
+		}
 		if g.sel < 0 || g.sel >= n {
 			continue
 		}
@@ -571,8 +583,14 @@ func (a *App) popoverPointerMove(back ui.Element, st *popoverState, n int) {
 			if st.hi != g.sel {
 				st.hi = g.sel
 			}
+			st.pointerPending = false
 			return
 		}
+	}
+	// The row boxes can land a frame after the pointer. Keep the move
+	// until a frame that has them.
+	if ready {
+		st.pointerPending = false
 	}
 }
 

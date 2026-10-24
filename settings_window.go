@@ -75,6 +75,8 @@ func (a *App) resetAllSettings() {
 	a.data.RestoreLast = true
 	a.data.KeepLastRequest = true
 	a.data.TimeoutSec = 0
+	a.data.AutoTitles = true
+	a.data.TitleModel = nil
 	a.pref = a.snapshotFrom(a.data.Defaults)
 	a.timeoutText = "0"
 	a.prefReady = true
@@ -188,7 +190,7 @@ func (a *App) settingsSectionVisible(s settingsNav) bool {
 func settingsBlob(id string) string {
 	switch id {
 	case "general":
-		return "model provider reasoning temperature max tokens max context rounds system prompt send show reasoning restore about version updates acknowledgements"
+		return "model provider reasoning temperature max tokens max context rounds system prompt send show reasoning restore about version updates acknowledgements chat titles title model automatically generate"
 	case "models":
 		return "base url api key models providers openai anthropic xai ollama add provider test connection refresh"
 	case "appearance":
@@ -324,7 +326,164 @@ func (a *App) settingsGeneral(c *ui.Context) {
 			}
 		})
 	})
+	a.settingsTitles(c)
 	a.settingsAbout(c)
+}
+
+func (a *App) settingsTitles(c *ui.Context) {
+	a.settingsGroup(c, "Chat titles", func() {
+		a.settingsLine(c, titleToggleLabel, titleToggleHint, true, false, func(*ui.Element) {
+			sw := ui.Switch(c, &a.data.AutoTitles).Label(titleToggleLabel).Description(titleToggleHint)
+			if sw.Changed() {
+				if !a.data.AutoTitles {
+					a.cancelAutoTitles()
+				}
+				a.appearanceSavedUntil = c.Now().Add(motionCopied)
+				a.save()
+			}
+		})
+		hint := titleModelHint
+		hintColor := ui.Color{}
+		ref := a.data.TitleModel
+		unavailable := ref != nil && !a.titleModelAvailable(ref)
+		if unavailable {
+			hint = titleUnavailableHint
+			hintColor = a.look.StatusWarning
+		}
+		a.settingsLineColor(c, titleModelLabel, hint, hintColor, false, false, func(el *ui.Element) {
+			*el = a.titleModelButton(c, unavailable)
+		})
+	})
+}
+
+func (a *App) titleModelButton(c *ui.Context, unavailable bool) ui.Element {
+	p := a.look
+	b := ui.ButtonBase(c.Key("settings-title-model"))
+	// Compact and pinned to the trailing edge of the settings row.
+	// §20.7 uses the popup mark (chevron up over chevron down), the same
+	// 22pt control height as the other settings popup buttons.
+	b.Height(22).MaxWidth(220).Gap(6).Padding(0, 7, 0, 8).Radius(radiusRow).Background(p.ControlBg).Border(0.5, p.ControlBorder).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+	ref := a.data.TitleModel
+	switch {
+	case unavailable && ref != nil:
+		b.Label("Title model, " + ref.ModelID + ", unavailable. Titles use each chat’s model.")
+	case ref == nil:
+		b.Label("Title model, " + titleSameAsChat)
+	default:
+		b.Label("Title model, " + a.titleModelValue(ref))
+	}
+	b.Children(func() {
+		if unavailable && ref != nil {
+			ui.Icon(c, iconAlert).Size(12, 12).TextColor(p.StatusWarning).Shrink(0)
+			controlText(c, ref.ModelID, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
+		} else if ref == nil {
+			controlText(c, titleSameAsChat, 13, 0, 400, p.TextPrimary).SingleLine().Shrink(0)
+		} else {
+			cfg := a.titleModelConfig(ref)
+			ui.Box(c).Size(6, 6).Radius(3).Background(a.configColor(cfg)).Shrink(0)
+			prov, model := a.generalModelParts(cfg)
+			if prov != "" {
+				controlText(c, prov+" ·", 13, 0, 400, p.TextPrimary).NoWrap().Shrink(0)
+				controlText(c, " "+model, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
+			} else {
+				controlText(c, model, 13, 0, 400, p.TextPrimary).Ellipsis("…").Shrink(1).MinWidth(0)
+			}
+		}
+		ui.Icon(c, iconPopup).Size(12, 12).TextColor(p.TextSecondary).Shrink(0)
+	})
+	items, footer, search := a.titleModelEntries()
+	now := c.Now()
+	a.bindPopover(c, "settings-title-model", b, popSpec{
+		Name:         "Title model",
+		Items:        items,
+		Footer:       footer,
+		Search:       search,
+		SearchPrompt: "Search models",
+		OnSelect: func(id string) {
+			if id == modelMenuSettings {
+				a.openProviderSettings()
+				return
+			}
+			switch id {
+			case titleModelSame:
+				a.data.TitleModel = nil
+			default:
+				if connID, model, ok := parseModelChoiceID(id); ok {
+					a.data.TitleModel = &TitleModel{ProviderID: connID, ModelID: model}
+				}
+			}
+			a.appearanceSavedUntil = now.Add(motionCopied)
+			a.save()
+		},
+	})
+	return b
+}
+
+func (a *App) titleModelConfig(ref *TitleModel) Config {
+	cfg := Config{ConnectionID: ref.ProviderID, Model: ref.ModelID}
+	if c := a.connByID(ref.ProviderID); c != nil {
+		cfg.Provider = c.Provider
+		if c.Custom {
+			cfg.Provider = connDisplay(c)
+		}
+		cfg.BaseURL = connEffective(c)
+	}
+	return cfg
+}
+
+func (a *App) titleModelValue(ref *TitleModel) string {
+	if ref == nil {
+		return titleSameAsChat
+	}
+	prov, model := a.generalModelParts(a.titleModelConfig(ref))
+	if prov != "" {
+		return prov + " · " + model
+	}
+	return model
+}
+
+func (a *App) titleModelEntries() (items, footer []popEntry, search bool) {
+	opts := a.menuModels()
+	search = len(opts) >= menuSearchAt
+	ref := a.data.TitleModel
+	unavailable := ref != nil && !a.titleModelAvailable(ref)
+	sameOn := ref == nil
+	items = append(items, popEntry{
+		Kind: popItem, ID: titleModelSame, Text: titleSameAsChat,
+		Checkable: true, Checked: sameOn,
+		MarkKind: "title", MarkModel: titleSameAsChat, MarkOn: true,
+	})
+	if unavailable {
+		items = append(items, popEntry{
+			Kind: popItem, ID: modelChoiceID(ref.ProviderID, ref.ModelID), Text: ref.ModelID,
+			Checkable: true, Checked: true, Disabled: true, Secondary: titleUnavailable,
+			MarkKind: "title", MarkModel: ref.ModelID, MarkOn: false,
+		})
+	}
+	items = append(items, popEntry{Kind: popSep})
+	prev := ""
+	for _, opt := range opts {
+		if opt.connID != prev {
+			items = append(items, popEntry{
+				Kind: popHeader, Text: opt.provider, Dot: a.menuDot(a.connByID(opt.connID)),
+			})
+			prev = opt.connID
+		}
+		id := modelChoiceID(opt.connID, opt.model)
+		on := ref != nil && ref.ProviderID == opt.connID && ref.ModelID == opt.model
+		// The provider is the group header. The row is the model id, the
+		// same as the composer menu. Search still matches the provider
+		// through Group. §11.3 does not ask rows to read "Provider · model".
+		items = append(items, popEntry{
+			Kind: popItem, ID: id, Text: opt.model, Group: opt.provider,
+			Checkable: true, Checked: on,
+			MarkKind: "title", MarkProv: opt.provider, MarkModel: opt.model, MarkOn: true,
+		})
+	}
+	footer = []popEntry{{
+		Kind: popItem, ID: modelMenuSettings, Text: "Models & Providers…",
+	}}
+	return items, footer, search
 }
 
 func (a *App) settingsAbout(c *ui.Context) {

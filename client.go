@@ -281,6 +281,58 @@ func StreamChat(ctx context.Context, cfg Config, history []Message, onDelta func
 	return read(err)
 }
 
+// completeChat posts one non-streaming chat completion and returns the
+// assistant text. Title generation uses it so a title does not stream
+// into the transcript.
+func completeChat(ctx context.Context, cfg Config, body []byte) (string, error) {
+	if err := validateConfig(cfg); err != nil {
+		return "", err
+	}
+	endpoint, err := completionsURL(cfg.BaseURL)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Cove/"+appVersion)
+	key := strings.TrimSpace(cfg.APIKey)
+	if key != "" {
+		if strings.Contains(strings.ToLower(endpoint), "openai.azure.com") {
+			req.Header.Set("api-key", key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
+		return "", fmt.Errorf("Could not reach the API: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return "", &StatusError{Status: resp.StatusCode, Body: string(b)}
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, jsonCompletionLimit))
+	if err != nil {
+		return "", fmt.Errorf("Could not read the API response: %v", err)
+	}
+	d, _, _, err := decodeSSEData(string(b))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(d.Content) == "" {
+		return "", errors.New("The model returned an empty title.")
+	}
+	return d.Content, nil
+}
+
 func readJSONCompletion(r io.Reader, onDelta func(Delta)) error {
 	b, err := io.ReadAll(io.LimitReader(r, jsonCompletionLimit))
 	if err != nil {

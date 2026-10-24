@@ -98,6 +98,8 @@ func (a *App) view(c *ui.Context) {
 	c.Root().HandleInput(a.noteQuotePointer)
 	a.shortcuts(c)
 	a.settleComposerFocus()
+	a.noteTitleClock(c)
+	a.syncWindowTitle()
 	if a.announce != "" {
 		c.Announce(a.announce)
 		a.announce = ""
@@ -171,6 +173,9 @@ func (a *App) view(c *ui.Context) {
 	// A request the composer did not take (no field, or a sheet opened
 	// over it in this frame) does not fire on a later frame.
 	a.focusComposerID = ""
+	if framePaintHook != nil {
+		framePaintHook(a, c)
+	}
 }
 
 // paintWindowBackground lives in gradient.go. It draws one cached bitmap
@@ -307,18 +312,9 @@ func (a *App) sidebar(c *ui.Context) {
 			}
 			return a.data.Conversations[row.index].ID
 		}
+		a.sideClock = c.Now()
 		a.side.Label = func(i int) string {
-			if i < 0 || i >= len(a.sideRows) {
-				return ""
-			}
-			row := a.sideRows[i]
-			if row.header != "" {
-				return row.header
-			}
-			if row.index < 0 || row.index >= len(a.data.Conversations) {
-				return ""
-			}
-			return a.data.Conversations[row.index].Title
+			return a.sideAccessLabel(i, a.sideClock)
 		}
 		a.side.Header = func(i int) bool {
 			return i >= 0 && i < len(a.sideRows) && a.sideRows[i].header != ""
@@ -358,13 +354,19 @@ func (a *App) sidebar(c *ui.Context) {
 
 func (a *App) rebuildSide(now time.Time) {
 	q := strings.ToLower(strings.TrimSpace(a.query))
+	if q != a.sideQuery || a.sideKeep == nil {
+		a.sideQuery = q
+		a.sideKeep = map[string]bool{}
+	}
 	rows := make([]sideRow, 0, len(a.data.Conversations)*2)
 	last := ""
 	for i := range a.data.Conversations {
 		conv := &a.data.Conversations[i]
 		if q != "" {
 			blob := strings.ToLower(conv.Title + " " + conv.Config.Model)
-			if !strings.Contains(blob, q) {
+			if strings.Contains(blob, q) {
+				a.sideKeep[conv.ID] = true
+			} else if !a.sideKeep[conv.ID] {
 				continue
 			}
 		}
@@ -431,11 +433,22 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 			a.selectChat(id)
 			a.beginRename()
 		}
+		regen := m.Item(titleRegenLabel)
+		if !a.canRegenerateTitle(conv) {
+			regen.Disabled(true)
+		}
+		if regen.Chosen() {
+			// Another chat stays in the sidebar only. The open chat greys
+			// its title bar in the same frame as its row.
+			a.regenerateTitle(id, id == a.data.ActiveID)
+		}
+		m.Separator()
 		if m.Item("Delete").Chosen() {
 			a.selectChat(id)
 			a.askDelete()
 		}
 	})
+	line.Label(a.sideAccessLabel(sideListIndex(a.sideRows, a.data.Conversations, id), c.Now()))
 	when := conv.UpdatedAt
 	if when.IsZero() {
 		when = conv.CreatedAt
@@ -447,22 +460,19 @@ func (a *App) sidebarRow(c *ui.Context, row sideRow) {
 		} else {
 			dot.Background(a.configColor(conv.Config))
 		}
-		title := ui.Text(c, sidebarTitle(conv)).FontSize(13).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+		titleColor := p.TextPrimary
+		if a.titleDimmed(id, false) {
+			titleColor = p.TextSecondary
+		}
+		weight := 0
 		if selected {
-			title.FontWeight(500)
+			weight = 500
 		}
+		a.fadingTitle(c, id, sidebarTitle(conv), false, 13, weight, titleColor, true)
 		// Every row shows the time. Streaming replaces it with "Generating".
+		// A title request replaces it with a spinner or, on failure, a warning.
 		// The model name stays in the title bar, not in this meta slot.
-		meta := sidebarWhen(c.Now(), when)
-		if showsDraft(conv) {
-			meta = "Draft"
-		}
-		if a.isStreaming(id) {
-			meta = "Generating"
-		}
-		if meta != "" {
-			ui.Text(c, meta).FontSize(11).TextColor(p.TextSecondary).Shrink(0).SingleLine()
-		}
+		a.sideMeta(c, conv, when)
 	})
 }
 
@@ -793,10 +803,11 @@ func (a *App) titleBar(c *ui.Context, conv *Conversation) {
 			return
 		}
 		ui.Column(c).Gap(2).Grow(1).MinWidth(0).Clip().Children(func() {
-			title := ui.Text(c, conv.Title).FontSize(14).FontWeight(600).SingleLine().Ellipsis("…").FillWidth().MinWidth(0)
-			if !p.Focused {
-				title.TextColor(p.TextSecondary)
+			titleColor := p.TextPrimary
+			if !p.Focused || a.titleDimmed(conv.ID, true) {
+				titleColor = p.TextSecondary
 			}
+			a.fadingTitle(c, conv.ID, conv.Title, true, 13, 600, titleColor, false)
 			ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
 				ui.Box(c).Size(6, 6).Radius(3).Background(a.configColor(conv.Config)).Shrink(0)
 				ui.Text(c, a.subtleModel(conv)).FontSize(11).TextColor(p.TextSecondary).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
@@ -882,6 +893,8 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 		Items: []popEntry{
 			{Kind: popItem, ID: "settings", Text: "Chat Settings…", MarkKind: "more", MarkModel: "Chat Settings…", MarkOn: true},
 			{Kind: popItem, ID: "rename", Text: "Rename", MarkKind: "more", MarkModel: "Rename", MarkOn: true},
+			{Kind: popItem, ID: "retitle", Text: titleRegenLabel, Disabled: !a.canRegenerateTitle(a.active()), MarkKind: "more", MarkModel: titleRegenLabel, MarkOn: a.canRegenerateTitle(a.active())},
+			{Kind: popSep, MarkKind: "sep"},
 			{Kind: popItem, ID: "delete", Text: "Delete chat", MarkKind: "more", MarkModel: "Delete chat", MarkOn: true},
 			{Kind: popSep, MarkKind: "sep"},
 			{Kind: popItem, ID: "request", Text: "Last request", MarkKind: "more", MarkModel: "Last request", MarkOn: true},
@@ -892,6 +905,10 @@ func (a *App) moreMenu(c *ui.Context, anchor ui.Element) {
 				a.openSettings()
 			case "rename":
 				a.beginRename()
+			case "retitle":
+				if conv := a.active(); conv != nil {
+					a.regenerateTitle(conv.ID, true)
+				}
 			case "delete":
 				a.askDelete()
 			case "request":
@@ -2486,7 +2503,14 @@ func (a *App) settingsRow(c *ui.Context, label string, first, top bool, fn func(
 // description under the label. The control is at most 300 wide and only
 // as wide as it needs to be, so a long label stays on one line.
 func (a *App) settingsLine(c *ui.Context, label, hint string, first, top bool, fn func(*ui.Element)) {
+	a.settingsLineColor(c, label, hint, ui.Color{}, first, top, fn)
+}
+
+func (a *App) settingsLineColor(c *ui.Context, label, hint string, hintColor ui.Color, first, top bool, fn func(*ui.Element)) {
 	p := a.look
+	if hintColor.A == 0 {
+		hintColor = p.TextSecondary
+	}
 	ui.Column(c).FillWidth().Children(func() {
 		if !first {
 			ui.Box(c).Height(1).FillWidth().Margin(0, 0, 0, 12).Background(p.SeparatorDefault)
@@ -2510,7 +2534,7 @@ func (a *App) settingsLine(c *ui.Context, label, hint string, first, top bool, f
 				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 					ui.Text(c, label).FontSize(13).TextAlign(ui.Start).SingleLine().Ellipsis("…")
 					if hint != "" {
-						hintText := ui.Text(c, hint).FontSize(12).TextColor(p.TextSecondary).TextAlign(ui.Start)
+						hintText := ui.Text(c, hint).FontSize(12).TextColor(hintColor).TextAlign(ui.Start)
 						if len(hint) > 48 {
 							hintText.FillWidth()
 						} else {
