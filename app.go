@@ -190,6 +190,8 @@ type App struct {
 	// while the window is key; with no record it goes to the end.
 	seenWindowFocus      bool
 	windowWasFocused     bool
+	seenSettingsFocus    bool
+	settingsWasFocused   bool
 	pendingActivate      bool
 	activateByClick      bool
 	activateKeep         int

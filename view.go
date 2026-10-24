@@ -65,7 +65,6 @@ func (a *App) view(c *ui.Context) {
 	a.inRender = true
 	defer func() { a.inRender = false }()
 	a.paintCtx = c
-	a.beginRings()
 	a.resetTabTargets()
 	a.resetSettingsTabs()
 	a.fullKeyboard = c.Preferences().FullKeyboardAccess
@@ -75,6 +74,9 @@ func (a *App) view(c *ui.Context) {
 	}
 	a.embeddedSettings = embedded
 	a.bindLedger(c, embedded)
+	// The fade reads the ledger beginRings just snapshotted. Binding
+	// first keeps a window switch from fading the other window's ring.
+	a.beginRings()
 	a.bindSelectionHandoff(c)
 	// modelMenuSeen is set by the composer menu while its popup is open.
 	// A pass that builds no open menu drops the chat recorded for it, so
@@ -1613,7 +1615,7 @@ func (a *App) thinkingBlock(c *ui.Context, m *Message, live bool) {
 	ui.Column(c).AlignItems(ui.Start).Children(func() {
 		parts := ui.CollapsibleBase(c, &m.ReasoningOpen)
 		a.noteThinking(m.ID, m.ReasoningOpen, parts.Progress())
-		tr := parts.Trigger.Gap(6).Height(26).AlignItems(ui.Center).AlignSelf(ui.Start)
+		tr := parts.Trigger.Gap(6).Height(26).AlignItems(ui.Center).AlignSelf(ui.Start).Label(label)
 		a.quietControl(tr, radiusRow)
 		a.noteMessageTab(tr)
 		a.takeTab(c, tr)
@@ -3235,7 +3237,7 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	}
 	slot := a.hScrollSlot(a.hScrollKey("code", b.Index))
 	edge := scrollEdge(p.CodeBg, a.cardFlat())
-	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).Clip().AlignSelf(ui.Stretch).Label("code block").Children(func() {
+	ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).AlignSelf(ui.Stretch).Label("code block").Children(func() {
 		ui.Row(c).Height(28).Padding(0, 4, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
 			ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
 			ui.Spacer(c)
@@ -3247,7 +3249,7 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 		// Body hardcodes 0.25em (3.5px at 14pt) above the code. The design
 		// pre is 10px 12px 12px, and the sides and bottom already come
 		// from CodeBlockPadding.
-		ui.Column(c).Padding(6.5, 0, 0, 0).AlignSelf(ui.Stretch).Label("qcode:" + lang).Children(func() {
+		ui.Column(c).Padding(6.5, 0, 0, 0).Clip().AlignSelf(ui.Stretch).Label("qcode:" + lang).Children(func() {
 			ui.Box(c).AlignSelf(ui.Stretch).Children(func() {
 				b.Body(c).TrackScroll(&slot.st).AlignSelf(ui.Stretch)
 				hScrollFades(c, slot, "code", edge)

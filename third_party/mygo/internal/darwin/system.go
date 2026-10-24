@@ -203,7 +203,9 @@ func (t theme) Preferences() platform.Preferences {
 		p.ReduceMotion = sendBool(ws, "accessibilityDisplayShouldReduceMotion")
 		p.ReduceTransparency = sendBool(ws, "accessibilityDisplayShouldReduceTransparency")
 		p.HighContrast = sendBool(ws, "accessibilityDisplayShouldIncreaseContrast")
-		p.FullKeyboardAccess = sendBool(t.b.app, "isFullKeyboardAccessEnabled")
+		// isFullKeyboardAccessEnabled stays cached until relaunch. The
+		// global-domain key is what ⌃F7 and System Settings write.
+		p.FullKeyboardAccess = fullKeyboardAccessEnabled()
 		// The accent, as the app's appearance draws it.
 		var c id
 		appearance := class("NSAppearance")
@@ -221,6 +223,28 @@ func (t theme) Preferences() platform.Preferences {
 		}
 	})
 	return p
+}
+
+// fullKeyboardAccessEnabled reads AppleKeyboardUIMode from NSGlobalDomain.
+// Bit 0 is menus, the Dock, and windows. Bit 1 (value 2) is Full Keyboard
+// Access. A missing key is off, which is the macOS default.
+func fullKeyboardAccessEnabled() bool {
+	var on bool
+	withPool(func() {
+		defs := send(class("NSUserDefaults"), "standardUserDefaults")
+		// System Settings writes the domain from another process.
+		send(defs, "synchronize")
+		domain := send(defs, "persistentDomainForName:", uintptr(nsString("NSGlobalDomain")))
+		if domain == 0 {
+			return
+		}
+		val := send(domain, "objectForKey:", uintptr(nsString("AppleKeyboardUIMode")))
+		if val == 0 {
+			return
+		}
+		on = platform.KeyboardUIModeFull(sendInt(val, "integerValue"))
+	})
+	return on
 }
 
 func (t theme) IsDark() bool {

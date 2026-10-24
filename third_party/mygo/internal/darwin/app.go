@@ -136,6 +136,9 @@ func (b *Backend) Init(h platform.AppHandler, opts platform.AppOptions) error {
 	for _, name := range []string{"AppleLanguagePreferencesChangedNotification", "AppleTimePreferencesChangedNotification", "AppleDatePreferencesChangedNotification"} {
 		send(distributed, "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("localeChanged:")), uintptr(nsString(name)), 0)
 	}
+	// Posted when Full Keyboard Access (AppleKeyboardUIMode) changes.
+	send(distributed, "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("preferencesChanged:")),
+		uintptr(nsString("com.apple.KeyboardUIModeDidChange")), 0)
 	return nil
 }
 
@@ -318,6 +321,10 @@ func registerAppDelegate() {
 		}),
 		method("applicationDidBecomeActive:", func(self id, _ objc.SEL, n id) {
 			theBackend.h.DidBecomeActive()
+			// ⌃F7 can change while this app is in the background. Becoming
+			// active re-reads AppleKeyboardUIMode if the distributed
+			// notification was missed.
+			theBackend.h.ThemeChanged()
 		}),
 		method("applicationDidResignActive:", func(self id, _ objc.SEL, n id) {
 			theBackend.h.DidResignActive()

@@ -595,47 +595,67 @@ func TestFocusRingShots(t *testing.T) {
 			suffix = "dark"
 		}
 		a, tt := focusChats(t)
+		conv := a.active()
+		conv.Messages[1].Content = "ans\n\n```\nfmt.Println(1)\n```\n"
+		conv.Messages[1].Reasoning = "weighed it"
+		conv.Messages[1].ThinkingMS = 12000
 		tt.SetDark(dark)
 		tt.Frame()
 		focusDraft(t, tt)
 		tt.Key(ui.Shift, ui.KeyTab)
 		requireSidebar(t, a, "Focus")
-		crop("sidebar-"+suffix+".png", tt, "Focus", 8)
+		writeCrop(t, dir, "sidebar-"+suffix+".png", tt, "Focus", chatRowRect(t, tt, "Focus"), 12)
 		save("sidebar-window-"+suffix+".png", tt)
 
 		tt.Key(ui.Shift, ui.KeyTab)
 		if a.settled.kind != focusSearch {
 			t.Fatalf("search kind %d", a.settled.kind)
 		}
-		crop("search-"+suffix+".png", tt, "Search", 10)
+		cropSearchRing(t, dir, "search-"+suffix+".png", tt)
 
 		enableFullKeyboard(tt)
-		tt.Key(0, ui.KeyTab) // list
-		tt.Key(0, ui.KeyTab) // composer, no ring
-		tt.Key(0, ui.KeyTab) // model
-		crop("model-"+suffix+".png", tt, "Model gpt-4o-mini", 10)
-		tt.Key(0, ui.KeyTab) // effort, may be absent
-		if !tt.Focused("Send") {
-			tt.Key(0, ui.KeyTab)
+		focusDraft(t, tt)
+		tt.Type("hi")
+		if !focusUntil(t, tt, "Model gpt-4o-mini", 6) {
+			t.Fatal("model chip is not a tab stop")
 		}
-		if !tt.Focused("Send") {
-			tt.Key(0, ui.KeyTab)
+		crop("model-"+suffix+".png", tt, "Model gpt-4o-mini", 12)
+		if !focusUntil(t, tt, "Reasoning: Default", 4) {
+			t.Fatal("reasoning chip is not a tab stop")
 		}
-		if tt.Focused("Send") {
-			crop("send-"+suffix+".png", tt, "Send", 12)
+		crop("reasoning-"+suffix+".png", tt, "Reasoning: Default", 14)
+		if !focusUntil(t, tt, "New Session", 4) {
+			t.Fatal("New Session is not a tab stop")
 		}
-		for i := 0; i < 6 && !tt.Focused("More"); i++ {
-			tt.Key(0, ui.KeyTab)
+		crop("new-session-"+suffix+".png", tt, "New Session", 14)
+		if !focusUntil(t, tt, "Send", 4) {
+			t.Fatal("Send is not a tab stop")
 		}
-		if tt.Focused("More") {
-			crop("more-"+suffix+".png", tt, "More", 10)
+		crop("send-"+suffix+".png", tt, "Send", 14)
+		if !focusUntil(t, tt, "Regenerate", 4) {
+			t.Fatal("title-bar Regenerate is not a tab stop")
 		}
-		for i := 0; i < 8 && !tt.Focused("Copy"); i++ {
-			tt.Key(0, ui.KeyTab)
+		crop("regen-"+suffix+".png", tt, "Regenerate", 14)
+		if !focusUntil(t, tt, "More", 4) {
+			t.Fatal("More is not a tab stop")
 		}
-		if tt.Focused("Copy") {
-			crop("copy-"+suffix+".png", tt, "Copy", 12)
+		crop("more-"+suffix+".png", tt, "More", 14)
+		if !focusUntil(t, tt, "Copy", 8) {
+			t.Fatal("Copy is not a tab stop")
 		}
+		crop("copy-"+suffix+".png", tt, "Copy", 14)
+		if !focusUntil(t, tt, "Edit", 4) {
+			t.Fatal("Edit is not a tab stop")
+		}
+		crop("edit-"+suffix+".png", tt, "Edit", 14)
+		if !focusUntil(t, tt, "Thought for 12s", 6) {
+			t.Fatal("thinking disclosure is not a tab stop")
+		}
+		cropWider(t, dir, "thinking-"+suffix+".png", tt, "Thought for 12s", 14, 40)
+		if !focusUntil(t, tt, "Copy code", 8) {
+			t.Fatal("code-block Copy is not a tab stop")
+		}
+		crop("code-copy-"+suffix+".png", tt, "Copy code", 16)
 
 		tt.SetFocused(false)
 		tt.Frame()
@@ -644,6 +664,7 @@ func TestFocusRingShots(t *testing.T) {
 		shotSettingsRings(t, dir, suffix, dark)
 		shotQuoteRing(t, dir, suffix)
 		shotDialogRing(t, dir, suffix)
+		shotContrastRings(t, dir, suffix, dark)
 	}
 	writeFocusGallery(t, dir)
 }
@@ -724,6 +745,88 @@ func bringIntoView(t *testing.T, a *App, tt *ui.Tester, label string) {
 	}
 }
 
+func chatRowRect(t *testing.T, tt *ui.Tester, title string) ui.Rect {
+	t.Helper()
+	var best ui.Rect
+	ok := false
+	consider := func(r ui.Rect) {
+		if r.X > sidebarW || r.H < 16 || r.H > 40 || r.W < 8 {
+			return
+		}
+		if !ok || r.W > best.W {
+			best, ok = r, true
+		}
+	}
+	for _, r := range tt.FindAll(title) {
+		consider(r)
+	}
+	prefix := title + ", "
+	for _, text := range tt.Texts() {
+		if strings.HasPrefix(text, prefix) {
+			for _, r := range tt.FindAll(text) {
+				consider(r)
+			}
+		}
+	}
+	if !ok {
+		t.Fatalf("no sidebar row for %q", title)
+	}
+	return best
+}
+
+func navRowRect(t *testing.T, tt *ui.Tester, title string) ui.Rect {
+	t.Helper()
+	var best ui.Rect
+	ok := false
+	for _, r := range tt.FindAll(title) {
+		if r.X >= sidebarNarrow || r.H < 16 || r.H > 40 {
+			continue
+		}
+		if !ok || r.W > best.W {
+			best, ok = r, true
+		}
+	}
+	if !ok {
+		t.Fatalf("no settings nav row for %q", title)
+	}
+	return best
+}
+
+func cropSearchRing(t *testing.T, dir, name string, tt *ui.Tester) {
+	t.Helper()
+	r, ok := tt.FocusedRect("Search")
+	if !ok {
+		r, ok = tt.Find("Search")
+	}
+	if !ok {
+		t.Fatalf("missing search for %s", name)
+	}
+	// The ring hugs the capsule around the field, inset 10 from the sidebar.
+	row := ui.Rect{X: 10, Y: r.Y - (rowHeight-r.H)/2, W: sidebarW - 20, H: rowHeight}
+	if row.Y < 0 {
+		row.Y = 0
+	}
+	writeCrop(t, dir, name, tt, "Search", row, 10)
+}
+
+func cropWider(t *testing.T, dir, name string, tt *ui.Tester, label string, pad, maxH float32) {
+	t.Helper()
+	var best ui.Rect
+	ok := false
+	for _, r := range tt.FindAll(label) {
+		if maxH > 0 && r.H > maxH {
+			continue
+		}
+		if !ok || r.W > best.W {
+			best, ok = r, true
+		}
+	}
+	if !ok {
+		t.Fatalf("missing %q for %s", label, name)
+	}
+	writeCrop(t, dir, name, tt, label, best, pad)
+}
+
 func writeCrop(t *testing.T, dir, name string, tt *ui.Tester, label string, r ui.Rect, pad float32) {
 	t.Helper()
 	img := focusCrop(tt.Image(), r, pad, 1)
@@ -756,7 +859,13 @@ func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {
 	if !focusUntil(t, tt, "General", 4) {
 		t.Fatal("settings nav is not a tab stop")
 	}
-	cropLargest(t, dir, "settings-nav-"+suffix+".png", tt, "General", 8, 40, 0)
+	nav := navRowRect(t, tt, "General")
+	writeCrop(t, dir, "settings-nav-"+suffix+".png", tt, "General", nav, 12)
+	tt.ClickAt(nav.X+nav.W/2, nav.Y+nav.H/2)
+	if a.settingsNavKey {
+		t.Fatal("click left the ring on the settings nav")
+	}
+	writeCrop(t, dir, "settings-nav-click-"+suffix+".png", tt, "General", navRowRect(t, tt, "General"), 12)
 	if !focusUntil(t, tt, "Temperature", 8) {
 		t.Fatal("slider is not a tab stop")
 	}
@@ -819,6 +928,31 @@ func shotSettingsRings(t *testing.T, dir, suffix string, dark bool) {
 		t.Fatal("back button is not a tab stop")
 	}
 	cropLabeled(t, dir, "nav-back-"+suffix+".png", tt, "Back", 10, 0, 0)
+}
+
+func shotContrastRings(t *testing.T, dir, suffix string, dark bool) {
+	t.Helper()
+	a, tt := focusChats(t)
+	tt.SetDark(dark)
+	tt.Frame()
+	tt.SetPreferences(ui.Preferences{FullKeyboardAccess: true, HighContrast: true, TextScale: 1})
+	focusDraft(t, tt)
+	tt.Type("hi")
+	tt.Key(ui.Shift, ui.KeyTab)
+	requireSidebar(t, a, "Focus")
+	writeCrop(t, dir, "contrast-sidebar-"+suffix+".png", tt, "Focus", chatRowRect(t, tt, "Focus"), 12)
+	if !focusUntil(t, tt, "Send", 8) {
+		t.Fatal("contrast Send is not a tab stop")
+	}
+	cropLabeled(t, dir, "contrast-button-"+suffix+".png", tt, "Send", 14, 40, 40)
+	tt.Key(ui.Shift, ui.KeyTab)
+	for i := 0; i < 6 && !tt.Focused("Search"); i++ {
+		tt.Key(ui.Shift, ui.KeyTab)
+	}
+	if !tt.Focused("Search") {
+		t.Fatal("contrast search field")
+	}
+	cropSearchRing(t, dir, "contrast-field-"+suffix+".png", tt)
 }
 
 func shotQuoteRing(t *testing.T, dir, suffix string) {

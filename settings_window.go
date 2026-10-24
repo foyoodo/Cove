@@ -91,10 +91,11 @@ func (a *App) settingsWindowRoot(c *ui.Context) {
 	a.inRender = true
 	defer func() { a.inRender = false }()
 	a.paintCtx = c
-	a.beginRings()
 	a.resetSettingsTabs()
 	a.fullKeyboard = c.Preferences().FullKeyboardAccess
 	a.bindLedger(c, true)
+	a.beginRings()
+	a.trackSettingsFocus(c)
 	a.applyLook(c)
 	if a.popupOpen() {
 		c.Shortcut(0, ui.KeyTab)
@@ -1072,14 +1073,17 @@ func (a *App) prefTemperature(c *ui.Context) ui.Element {
 	p := a.look
 	const inset = float32(8)
 	s := ui.SliderBase(c, &a.pref.temp, 0, 2).Step(0.1).Width(148).Height(16).PaddingX(inset).FocusRing(false).Label("Temperature")
+	if !a.pref.tempOn {
+		s.Disabled(true)
+	}
+	// Register the slider before the switch. Noting it from the knob
+	// ring, after switchRing, put "Send temperature" first in the tab order.
+	a.noteSettingsStop(s, false)
 	ui.Textf(c, "%.1f", a.pref.temp).Font("ui-monospace").FontSize(12)
 	sw := ui.Switch(c, &a.pref.tempOn).Label("Send temperature")
 	a.switchRing(sw)
 	if sw.Changed() {
 		a.commitPref(c.Now())
-	}
-	if !a.pref.tempOn {
-		s.Disabled(true)
 	}
 	if s.Changed() {
 		a.commitPref(c.Now())

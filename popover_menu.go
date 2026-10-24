@@ -196,12 +196,19 @@ func (a *App) bindPopover(c *ui.Context, key string, anchor ui.Element, spec pop
 	if !st.open && (anchor.Clicked() || st.pendingKey) {
 		keyboard := st.pendingKey
 		st.pendingKey = false
+		// Only this window's menus. Closing another window's menu here
+		// would pop the ledger of the window that is key now and leave
+		// the owner's counter stuck.
 		for k, other := range a.popovers {
-			if k != key && other.open {
-				a.releasePopover(other, false)
-				other.open = false
-				other.closing = false
+			if k == key || other == nil || !other.open {
+				continue
 			}
+			if other.owner != 0 && other.owner != a.windowToken {
+				continue
+			}
+			a.releasePopover(other, false)
+			other.open = false
+			other.closing = false
 		}
 		a.pushFocusReturn()
 		st.reset(c, keyboard)
@@ -233,6 +240,10 @@ func (a *App) releasePopover(st *popoverState, keyboard bool) {
 		return
 	}
 	st.pushed = false
+	if st.owner != 0 && st.owner != a.windowToken {
+		a.popOwnedLedger(st.owner, keyboard)
+		return
+	}
 	a.popFocusReturnShown(keyboard)
 }
 

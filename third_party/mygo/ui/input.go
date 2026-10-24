@@ -83,6 +83,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.SurfaceFocus:
 		rt.windowFocused = true
 		rt.blinkStart = rt.now()
+		// Full Keyboard Access is read once until the desktop reports a
+		// change. Becoming key re-reads it when that notice was missed.
+		rt.themeChanged()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
 		rt.windowFocused = false
@@ -263,6 +266,11 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 	} else {
 		rt.downs = append(rt.downs, 0)
 	}
+	// A left press hides the keyboard ring even when focus stays put:
+	// KeepFocus controls, and a list row that was already focused.
+	if button == 0 {
+		rt.focusVisible = false
+	}
 	if button == 0 && rt.scrollbarPress(chain, x, y) {
 		return
 	}
@@ -290,7 +298,6 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		}
 		if newFocus != rt.focused {
 			rt.focused = newFocus
-			rt.focusVisible = false
 			rt.blinkStart = rt.now()
 		}
 	}
@@ -716,7 +723,8 @@ func (rt *engine) handoffSelection(mods Modifiers, key Key) bool {
 	rt.handedOff = true
 	rt.updateTextInput()
 	rt.handedOff = false
-	rt.focusVisible = true
+	// Typing into the composer is pointer-like: the ring stays off.
+	rt.focusVisible = false
 	rt.requestFrame()
 	return true
 }

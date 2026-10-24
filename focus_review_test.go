@@ -173,6 +173,88 @@ func TestFocusLedgerPerWindow(t *testing.T) {
 	}
 }
 
+func TestTemperatureSliderPrecedesSwitch(t *testing.T) {
+	a, tt := focusChats(t)
+	temp := 1.2
+	a.data.Defaults.Temperature = &temp
+	a.prefReady = false
+	tt.Frame()
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "General", 6) {
+		t.Fatal("settings nav")
+	}
+	sawSlider := false
+	for i := 0; i < 12; i++ {
+		tt.Key(0, ui.KeyTab)
+		if tt.Focused("Temperature") {
+			sawSlider = true
+		}
+		if tt.Focused("Send temperature") {
+			if !sawSlider {
+				t.Fatal("Send temperature came before the Temperature slider")
+			}
+			return
+		}
+	}
+	t.Fatal("did not reach Send temperature")
+}
+
+func TestTabSkipsDisabledControls(t *testing.T) {
+	a, tt := focusChats(t)
+	a.active().Messages = nil
+	a.active().Draft = ""
+	tt.Frame()
+	enableFullKeyboard(tt)
+	focusDraft(t, tt)
+	for i := 0; i < 8; i++ {
+		tt.Key(0, ui.KeyTab)
+		if tt.Focused("Send") || tt.Focused("Regenerate") {
+			t.Fatal("tab landed on a disabled control")
+		}
+		if tt.Focused("More") {
+			return
+		}
+	}
+	t.Fatal("did not reach More")
+}
+
+func TestPopupOpenIsThisWindow(t *testing.T) {
+	a := newTestApp(t)
+	a.windowToken = 1
+	a.popovers = map[string]*popoverState{
+		"title-more":     {open: true, owner: 2},
+		"settings-model": {open: true, owner: 1},
+	}
+	if !a.popupOpen() {
+		t.Fatal("this window's menu was ignored")
+	}
+	a.popovers["settings-model"].open = false
+	if a.popupOpen() {
+		t.Fatal("another window's menu swallowed Tab")
+	}
+}
+
+func TestDropSettingsWindowDeletesLedger(t *testing.T) {
+	a := newTestApp(t)
+	const token uintptr = 0x51
+	a.settingsToken = token
+	a.windowToken = token
+	a.cur = a.ensureLedger(token)
+	a.returnDepth = 3
+	a.storeLedger()
+	a.dropSettingsWindow()
+	if _, ok := a.ledgers[token]; ok {
+		t.Fatal("settings ledger was kept")
+	}
+	if a.settingsToken != 0 || a.windowToken != 0 || a.cur != nil {
+		t.Fatal("drop left the settings window bound")
+	}
+}
+
 func TestSettingsTabSkipsButtons(t *testing.T) {
 	_, tt := focusChats(t)
 	if err := tt.Click("Settings"); err != nil {
@@ -192,6 +274,128 @@ func TestSettingsTabSkipsButtons(t *testing.T) {
 	}
 	if !tt.Focused("Max tokens") {
 		t.Fatal("tab did not reach the number field")
+	}
+}
+
+func TestCrossWindowMenuDoesNotStickLedger(t *testing.T) {
+	a, tt := focusChats(t)
+	requireComposer(t, a, tt)
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	main := a.windowToken
+	mainLedger := a.ledgers[main]
+	more := a.popovers["title-more"]
+	if mainLedger == nil || more == nil || !more.open || !more.pushed || mainLedger.depth == 0 {
+		t.Fatalf("more open=%v pushed=%v depth=%d", more != nil && more.open, more != nil && more.pushed, depthOf(mainLedger))
+	}
+	depth := mainLedger.depth
+	// The Settings window is already open. A click in it must not release
+	// the main window's menu against the settings ledger. Headless draws
+	// that window in this view; opening it by clicking Settings would hit
+	// the menu that is up.
+	a.settingsOpen = true
+	tt.Frame()
+	if err := tt.Click("Default model menu"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !more.open || !more.pushed {
+		t.Fatal("settings click closed the other window's menu")
+	}
+	if mainLedger.depth != depth {
+		t.Fatalf("settings click moved the main counter from %d to %d", depth, mainLedger.depth)
+	}
+	a.settingsOpen = false
+	tt.Frame()
+	// The other window becoming key closes this window's menu and pops
+	// its own counter. Headless settings share the surface, so resign
+	// the window the way a click in that other window does.
+	tt.SetFocused(false)
+	if depthOf(a.ledgers[main]) != 0 {
+		t.Fatalf("resign left the main counter at %d", depthOf(a.ledgers[main]))
+	}
+	if more.open {
+		t.Fatal("resign left More open")
+	}
+	tt.SetFocused(true)
+	for i := 0; i < 4 && a.settled.kind != focusSidebar; i++ {
+		tt.Key(ui.Shift, ui.KeyTab)
+	}
+	requireSidebar(t, a, "Focus")
+	tt.Key(ui.Cmd, ui.KeyBackspace)
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.returnDepth != 0 {
+		t.Fatalf("delete-cancel left the counter at %d", a.returnDepth)
+	}
+	requireSidebar(t, a, "Focus")
+}
+
+func depthOf(lg *focusLedger) int {
+	if lg == nil {
+		return 0
+	}
+	return lg.depth
+}
+
+func TestPointerPressHidesRing(t *testing.T) {
+	a, tt := focusChats(t)
+	if err := tt.Click("Settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "General", 8) {
+		t.Fatal("settings nav is not a tab stop")
+	}
+	if !a.settingsNavKey {
+		t.Fatal("tab did not show the settings nav ring")
+	}
+	row := navRowRect(t, tt, "General")
+	tt.ClickAt(row.X+row.W/2, row.Y+row.H/2)
+	if a.settingsNavKey {
+		t.Fatal("click left the ring on the settings row")
+	}
+
+	a.settingsOpen = false
+	tt.Frame()
+	enableFullKeyboard(tt)
+	if !focusUntil(t, tt, "Copy", 24) {
+		t.Fatal("did not reach Copy")
+	}
+	if !a.focusRT.FocusShows() {
+		t.Fatal("tab did not show a ring on Copy")
+	}
+	if err := tt.Click("Copy"); err != nil {
+		t.Fatal(err)
+	}
+	if a.focusRT.FocusShows() {
+		t.Fatal("click left the ring on Copy")
+	}
+}
+
+func TestFullKeyboardAccessAppliesOnActivation(t *testing.T) {
+	_, tt := focusChats(t)
+	focusDraft(t, tt)
+	tt.Key(0, ui.KeyTab)
+	if tt.Focused("More") || tt.Focused("Send") || tt.Focused("Model gpt-4o-mini") {
+		t.Fatal("Full Keyboard Access off visited a button")
+	}
+	tt.StagePreferences(ui.Preferences{FullKeyboardAccess: true, TextScale: 1})
+	tt.Frame()
+	focusDraft(t, tt)
+	tt.Key(0, ui.KeyTab)
+	if tt.Focused("More") || tt.Focused("Send") || tt.Focused("Model gpt-4o-mini") {
+		t.Fatal("staged Full Keyboard Access applied before the window was activated")
+	}
+	tt.SetFocused(false)
+	tt.SetFocused(true)
+	focusDraft(t, tt)
+	if !focusUntil(t, tt, "More", 12) {
+		t.Fatal("activating the window did not apply Full Keyboard Access")
 	}
 }
 
@@ -259,6 +463,9 @@ func TestIMEHandoffSkipsCaret(t *testing.T) {
 	}
 	if a.active().draftCaret == 1 {
 		t.Fatal("handoff frame restored the remembered mid-text caret")
+	}
+	if a.focusRT.FocusShows() {
+		t.Fatal("selection handoff left the keyboard ring on")
 	}
 }
 

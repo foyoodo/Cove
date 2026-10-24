@@ -393,10 +393,17 @@ func (t *Tester) SetDark(dark bool) {
 // SetPreferences changes the desktop's settings that controls follow, as
 // the user does in the system's settings.
 func (t *Tester) SetPreferences(p Preferences) {
-	t.h.prefs = platform.Preferences{Accent: platform.Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A}, ReduceMotion: p.ReduceMotion,
-		HighContrast: p.HighContrast, FullKeyboardAccess: p.FullKeyboardAccess, TextScale: float64(p.TextScale)}
+	t.StagePreferences(p)
 	t.rt.themeChanged()
 	t.settle()
+}
+
+// StagePreferences stores desktop settings without telling the view.
+// The next time the view re-reads them, as when its window becomes key,
+// Context.Preferences returns these. SetPreferences tells the view at once.
+func (t *Tester) StagePreferences(p Preferences) {
+	t.h.prefs = platform.Preferences{Accent: platform.Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A}, ReduceMotion: p.ReduceMotion,
+		HighContrast: p.HighContrast, FullKeyboardAccess: p.FullKeyboardAccess, TextScale: float64(p.TextScale)}
 }
 
 // SetLocale makes tag the language the app shows, as mygo.App.SetLocale

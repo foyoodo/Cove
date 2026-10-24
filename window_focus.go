@@ -37,6 +37,9 @@ func (a *App) trackWindowFocus(c *ui.Context) {
 	}
 	if !focused && a.windowWasFocused {
 		a.rememberActivateFocus()
+		// A native menu closes when its window resigns key. The other
+		// window becoming key is that edge.
+		a.closeMenusOnResign()
 	}
 	if focused && !a.windowWasFocused {
 		a.applyWindowActivate()
@@ -45,6 +48,21 @@ func (a *App) trackWindowFocus(c *ui.Context) {
 		a.pendingActivate = false
 	}
 	a.windowWasFocused = focused
+}
+
+// trackSettingsFocus closes the Settings window's menus when it resigns
+// key. The main window's tracker does not see that surface.
+func (a *App) trackSettingsFocus(c *ui.Context) {
+	focused := appWindowFocused(c)
+	if !a.seenSettingsFocus {
+		a.seenSettingsFocus = true
+		a.settingsWasFocused = focused
+		return
+	}
+	if !focused && a.settingsWasFocused {
+		a.closeMenusOnResign()
+	}
+	a.settingsWasFocused = focused
 }
 
 // rememberActivateFocus snapshots the editing surface that should keep

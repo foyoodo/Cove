@@ -199,12 +199,13 @@ func (a *App) dropSettingsWindow() {
 	a.closeOwnedPopovers(token)
 	if a.windowToken == token {
 		a.clearLiveLedger()
-		a.storeLedger()
-	} else if lg := a.ledgers[token]; lg != nil {
-		lg.depth = 0
-		lg.pending = false
-		lg.returnTo = focusPlace{}
+		a.cur = nil
+		a.windowToken = 0
 	}
+	// The key is the window's engine pointer. Leaving the entry would
+	// hand the next window that reuses the pointer this window's stack.
+	delete(a.ledgers, token)
+	a.settingsToken = 0
 	if a.confirmKind == confirmReset || a.confirmKind == confirmDeleteProvider {
 		a.confirmKind = ""
 	}
@@ -218,6 +219,36 @@ func (a *App) closeOwnedPopovers(token uintptr) {
 		st.open = false
 		st.closing = false
 		st.pushed = false
+	}
+}
+
+// closeMenusOnResign closes the menus of the window that just lost key,
+// the way a native menu closes, and pops that window's own ledger.
+func (a *App) closeMenusOnResign() {
+	for _, st := range a.popovers {
+		if st == nil || (!st.open && !st.pushed) {
+			continue
+		}
+		if st.owner != 0 && st.owner != a.windowToken {
+			continue
+		}
+		a.releasePopover(st, false)
+		st.open = false
+		st.closing = false
+	}
+}
+
+// popOwnedLedger pops one surface on a window that is not key. The live
+// ledger belongs to the window handling the event.
+func (a *App) popOwnedLedger(token uintptr, keyboard bool) {
+	lg := a.ledgers[token]
+	if lg == nil || lg.depth == 0 {
+		return
+	}
+	lg.depth--
+	if lg.depth == 0 {
+		lg.pending = true
+		lg.closeKeyboard = keyboard
 	}
 }
 
@@ -252,9 +283,13 @@ func (a *App) endFocusFrame(c *ui.Context, surf int) {
 
 func (a *App) popupOpen() bool {
 	for _, st := range a.popovers {
-		if st != nil && st.open {
-			return true
+		if st == nil || !st.open {
+			continue
 		}
+		if st.owner != 0 && st.owner != a.windowToken {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -592,7 +627,7 @@ func (a *App) handoffSelectionKey() bool {
 	// The composer element from the last frame is not a live handle between
 	// frames. Its id still names the text field, so the original key can
 	// go through the input method before the next frame rebuilds it.
-	if !a.focusRT.Valid() || !a.focusRT.FocusIfLive(a.composerElem, true) {
+	if !a.focusRT.Valid() || !a.focusRT.FocusIfLive(a.composerElem, false) {
 		return false
 	}
 	// The next frame must not Focus the composer again or move the caret.
@@ -776,7 +811,7 @@ func (a *App) resetTabTargets() {
 func (a *App) assembleTabs() {
 	var chain []tabHit
 	add := func(el ui.Element, kind tabKind, always bool) {
-		if !el.Valid() {
+		if !el.Valid() || el.IsDisabled() {
 			return
 		}
 		if !always && !a.fullKeyboard {
@@ -857,7 +892,7 @@ func (a *App) resetSettingsTabs() {
 }
 
 func (a *App) noteSettingsStop(el ui.Element, always bool) {
-	if !a.buildingSettings || !el.Valid() {
+	if !a.buildingSettings || !el.Valid() || el.IsDisabled() {
 		return
 	}
 	if !always && !a.fullKeyboard {
@@ -1171,7 +1206,6 @@ func (a *App) sliderKnobRing(el ui.Element, inset, frac float32) {
 		knob := ui.Rect{X: r.X + inset + frac*innerW - kw/2, Y: r.Y, W: kw, H: r.H}
 		a.strokeOuter(p, knob, kw/2, el.ID())
 	})
-	a.noteSettingsStop(el, false)
 }
 
 func (a *App) stepperRing(col, up, down ui.Element) {
@@ -1204,7 +1238,9 @@ func (a *App) swatchRing(el ui.Element) {
 		}
 		const offset float32 = 4
 		padded := ui.Rect{X: r.X - offset, Y: r.Y - offset, W: r.W + 2*offset, H: r.H + 2*offset}
-		paintOuterFocusRing(p, padded, 8, scaleAlpha(a.ringColor(), a.ringAlpha(el.ID())))
+		// Radius 12 on the padded rect. The 3pt stroke sits outside it,
+		// so the outer edge is a 15pt radius, concentric with the swatch.
+		paintOuterFocusRing(p, padded, 12, scaleAlpha(a.ringColor(), a.ringAlpha(el.ID())))
 	})
 	a.noteSettingsStop(el, false)
 }

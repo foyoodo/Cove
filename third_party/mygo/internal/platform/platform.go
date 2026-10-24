@@ -881,7 +881,7 @@ type Preferences struct {
 	HighContrast bool
 	// FullKeyboardAccess is macOS's Full Keyboard Access (⌃F7): Tab
 	// visits every control, not only text fields and lists. Other
-	// desktops leave it false.
+	// desktops leave it false. KeyboardUIModeFull reads the bit.
 	FullKeyboardAccess bool
 	// TextScale is how many times larger than usual text should be, as
 	// Windows's and GNOME's text size settings say; 0 or 1 for usual.
@@ -981,4 +981,11 @@ type Notification struct {
 	// Group gathers the notifications that share it (threadIdentifier on
 	// macOS).
 	Group string
+}
+
+// KeyboardUIModeFull reports Full Keyboard Access from AppleKeyboardUIMode
+// in NSGlobalDomain. Bit 0 covers menus, the Dock, and windows. Bit 1
+// (value 2) adds controls other than text fields and lists.
+func KeyboardUIModeFull(mode int) bool {
+	return mode&0x2 != 0
 }
