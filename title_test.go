@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -626,6 +629,95 @@ func TestTitleModelMenuShowsModelName(t *testing.T) {
 // TestTitleAsyncCancel runs the real title goroutine. The callback is
 // delivered back to this goroutine, so finishTitle never overlaps the
 // cancel. go test -race covers the handoff.
+// TestTitleTimeoutKeepsTemporaryTitle is an automatic request whose
+// server never answers. The deadline is the same context the app uses,
+// shortened so the test does not wait 15s. SPEC §20: a timeout keeps the
+// temporary title, stays silent, and titleGenerated stays recorded so the
+// chat is not asked again. titleSource stays temp.
+func TestTitleTimeoutKeepsTemporaryTitle(t *testing.T) {
+	prevDur := titleTimeout
+	titleTimeout = 15 * time.Millisecond
+	t.Cleanup(func() { titleTimeout = prevDur })
+	var got error
+	prev := titleComplete
+	titleComplete = func(ctx context.Context, _ Config, _ []byte) (string, error) {
+		<-ctx.Done()
+		got = ctx.Err()
+		return "Should not apply", got
+	}
+	t.Cleanup(func() { titleComplete = prev })
+
+	a := titleTestApp(t)
+	conv := a.conversation("chat")
+	const temp = "How do I cancel an in-flight HTTP request"
+	conv.Title = temp
+	conv.TitleSource = titleSourceTemp
+	conv.Config.APIKey = "sk-test"
+	start := time.Now()
+	a.maybeAutoTitle("chat")
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("timeout path waited %s", waited)
+	}
+	if !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("request ended with %v", got)
+	}
+	if conv.Title != temp || conv.TitleSource != titleSourceTemp || !conv.TitleGenerated {
+		t.Fatalf("after timeout title %q source %s generated %v", conv.Title, conv.TitleSource, conv.TitleGenerated)
+	}
+	if a.announce != "" || len(a.titleFails) != 0 || a.titleBusy("chat") {
+		t.Fatalf("timeout surfaced announce %q fails %d busy %v", a.announce, len(a.titleFails), a.titleBusy("chat"))
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
+	if tt.HasText(titleFailText) {
+		t.Fatal("timeout painted the failure warning")
+	}
+}
+
+// TestTitleApplyKeepsComposerFocus lands a title while the composer is
+// first responder, the draft is non-empty, and the caret is in the middle.
+func TestTitleApplyKeepsComposerFocus(t *testing.T) {
+	a := titleTestApp(t)
+	conv := a.conversation("chat")
+	conv.Title = "How do I cancel"
+	conv.TitleSource = titleSourceTemp
+	conv.Draft = ""
+	tt := ui.NewTester(a.view, 1100, 760)
+	if err := tt.Click("Message"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("abcdefghij")
+	for range 5 {
+		tt.Key(0, ui.KeyLeft)
+	}
+	if !tt.Focused("Message") {
+		t.Fatal("composer is not first responder")
+	}
+	if !a.composerCaretSet || a.composerAnchor != 5 || a.composerCaretPos != 5 {
+		t.Fatalf("caret anchor %d pos %d set %v", a.composerAnchor, a.composerCaretPos, a.composerCaretSet)
+	}
+	anchor, caret := a.composerAnchor, a.composerCaretPos
+	a.titleGens = map[string]int{conv.ID: 1}
+	a.titleJobs = map[string]*titleJob{conv.ID: {gen: 1}}
+	a.finishTitle(conv.ID, 1, false, "Cancel HTTP on close", nil)
+	tt.Frame()
+	if conv.Title != "Cancel HTTP on close" || conv.TitleSource != titleSourceAuto {
+		t.Fatalf("title did not land: %q %s", conv.Title, conv.TitleSource)
+	}
+	if !tt.Focused("Message") {
+		t.Fatal("title moved first responder")
+	}
+	if conv.Draft != "abcdefghij" {
+		t.Fatalf("draft changed to %q", conv.Draft)
+	}
+	if a.composerAnchor != anchor || a.composerCaretPos != caret {
+		t.Fatalf("caret %d,%d want %d,%d", a.composerAnchor, a.composerCaretPos, anchor, caret)
+	}
+	tt.Type("X")
+	if conv.Draft != "abcdeXfghij" {
+		t.Fatalf("caret was not still in the middle: %q", conv.Draft)
+	}
+}
+
 func TestTitleAsyncCancel(t *testing.T) {
 	runTitleAsync(t,
 		func(a *App) { a.maybeAutoTitle("chat") },

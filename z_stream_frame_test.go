@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime/metrics"
@@ -209,11 +210,19 @@ func openStream(t *testing.T, w, h int, scale float32, history int, instant bool
 
 func measureStream(t *testing.T, a *App, tt *ui.Tester, fp *frameProbe, builds *int, toks []string) []streamSample {
 	t.Helper()
+	return measureStreamDuring(t, a, tt, fp, builds, toks, nil)
+}
+
+func measureStreamDuring(t *testing.T, a *App, tt *ui.Tester, fp *frameProbe, builds *int, toks []string, atToken func(i int)) []streamSample {
+	t.Helper()
 	doc := parser.New(0)
 	var src strings.Builder
 	msg := &a.active().Messages[len(a.active().Messages)-1]
 	out := make([]streamSample, 0, len(toks))
 	for i, tok := range toks {
+		if atToken != nil {
+			atToken(i)
+		}
 		src.WriteString(tok)
 		p0 := time.Now()
 		doc.Set(src.String())
@@ -463,5 +472,87 @@ steady paragraph, last 80 tokens, max: %s
 	defer f.Close()
 	if _, err := f.WriteString(section); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestVeilStreamFrameBoundWithTitle is the 1,500-token stream with a title
+// request in flight. The request resolves on token 20, and the frames
+// after that paint the new title. The bounds are the same as
+// TestVeilStreamFrameBound.
+func TestVeilStreamFrameBoundWithTitle(t *testing.T) {
+	a, tt, fp, builds := openStream(t, 2880, 1800, 1, 0, true)
+	conv := a.active()
+	now := conv.UpdatedAt
+	conv.Title = "Streaming"
+	conv.TitleSource = titleSourceTemp
+	conv.TitleGenerated = true
+	conv.Config.ConnectionID = "openai"
+	conv.Config.APIKey = "sk-test"
+	conv.Messages = append([]Message{
+		{ID: "u", Role: roleUser, Content: "How do I cancel an in-flight request?", Done: true, CreatedAt: now},
+		{ID: "a0", Role: roleAssistant, Content: "Tie it to a context.", Done: true, CreatedAt: now},
+	}, conv.Messages...)
+	a.data.AutoTitles = true
+	a.data.Connections = []Connection{{
+		ID: "openai", Name: "OpenAI", Provider: "OpenAI", BaseURL: "https://api.openai.com/v1",
+		ModelsSet: true,
+		Models:    []ProviderModel{{ID: "gpt-4o-mini", Enabled: true}},
+	}}
+	if err := a.keys.Set("openai", "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callbacks := make(chan func(), 1)
+	prev := titleComplete
+	titleComplete = func(ctx context.Context, _ Config, _ []byte) (string, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-release:
+			return "Cancel an in-flight request", nil
+		}
+	}
+	t.Cleanup(func() {
+		titleComplete = prev
+		a.cancelAllTitles()
+	})
+	a.titleAsync = true
+	a.uiSync = func(fn func()) { callbacks <- fn }
+	a.startTitle(conv, false, false)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("title request did not start")
+	}
+	if !a.titleBusy(conv.ID) {
+		t.Fatal("title job was not in flight")
+	}
+
+	resolved := false
+	toks := streamTokens(1500)
+	xs := measureStreamDuring(t, a, tt, fp, builds, toks, func(i int) {
+		if i != 20 || resolved {
+			return
+		}
+		resolved = true
+		close(release)
+		select {
+		case fn := <-callbacks:
+			fn()
+		case <-time.After(2 * time.Second):
+			t.Fatal("title request did not resolve")
+		}
+	})
+	if conv.Title != "Cancel an in-flight request" || conv.TitleSource != titleSourceAuto {
+		t.Fatalf("title did not land during the stream: %q %s", conv.Title, conv.TitleSource)
+	}
+	wall := column(xs, func(s streamSample) time.Duration { return s.wall })
+	p95, max := percentile(wall, 0.95), percentile(wall, 1)
+	t.Logf("title-concurrent stream n=%d p95=%s max=%s bounds %s / %s", len(xs), fmtDur(p95), fmtDur(max), streamP95Bound, streamMaxBound)
+	if p95 > streamP95Bound || max > streamMaxBound {
+		t.Fatalf("title-concurrent stream p95 %s max %s (bounds %s / %s)", p95, max, streamP95Bound, streamMaxBound)
 	}
 }

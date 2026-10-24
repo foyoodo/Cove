@@ -36,8 +36,12 @@ const (
 	titleReplyRunes   = 1000
 	titleManualRounds = 3
 	titleTokensReason = 256
-	titleTimeout      = 15 * time.Second
 )
+
+// titleTimeout is how long a title request may run. A test may shorten
+// it; the app leaves it at 15s. A deadline keeps the temporary title and
+// shows nothing.
+var titleTimeout = 15 * time.Second
 
 // titleSystemPrompt asks for a title in the conversation's language.
 const titleSystemPrompt = "Write a short title for this conversation. Use the same language as the conversation. Reply with the title only: no quotes, no trailing period, no emoji, and no line breaks. Keep it within 30 characters (about 15 Chinese characters)."
