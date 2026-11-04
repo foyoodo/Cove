@@ -102,7 +102,7 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 		h := float32(tableMinRowH)
 		for k, cell := range row {
 			inner := widths[k] - tableCellPadX*2
-			ch := tableCellPadY*2 + float32(wrappedLineCount(cell.pieces, inner))*tableLineH
+			ch := tableCellPadY*2 + float32(wrappedLineCount(cell.pieces, inner, cell.width))*tableLineH
 			if ch > h {
 				h = ch
 			}
@@ -186,9 +186,24 @@ func tableAlign(aligns []parser.Align, k int) ui.Align {
 	}
 }
 
-func wrappedLineCount(pieces []cellPiece, wrapW float32) int {
+func wrappedLineCount(pieces []cellPiece, wrapW, natural float32) int {
+	hard := 1
+	for _, pc := range pieces {
+		for _, sp := range pc.spans {
+			hard += strings.Count(sp.Text, "\n")
+		}
+	}
+	if hard < 1 {
+		hard = 1
+	}
 	if wrapW < 8 {
 		wrapW = 8
+	}
+	// Streaming replies include many short tables. Shaping every cell
+	// every token is what blew the structured-build growth check; a cell
+	// whose unwrapped width already fits is as many lines as its breaks.
+	if natural <= wrapW {
+		return hard
 	}
 	spans := flattenCellPieces(pieces)
 	if len(spans) == 0 {
@@ -197,15 +212,15 @@ func wrappedLineCount(pieces []cellPiece, wrapW float32) int {
 	layout := ui.ShapeRichText(spans, ui.Font{Size: tableBodySize}, wrapW)
 	_, h := layout.Size()
 	if h <= 0 {
-		return 1
+		return hard
 	}
 	lh := layout.Caret(0).H
 	if lh < 8 {
 		lh = tableLineH
 	}
 	n := int(math.Round(float64(h / lh)))
-	if n < 1 {
-		n = 1
+	if n < hard {
+		n = hard
 	}
 	return n
 }
