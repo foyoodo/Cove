@@ -41,26 +41,32 @@ func tableWideMarkdown() string {
 	return "| " + strings.Join(heads, " | ") + " |\n| " + strings.Join(align, " | ") + " |\n| " + strings.Join(row, " | ") + " |\n"
 }
 
-func tableWrapMarkdown() string {
+func tableWrapMarkdown() string { return mockWrapMD() }
+
+func tableAlignMarkdown() string { return mockAlignMD() }
+
+func tableDeliveriesMarkdown() string { return mockWideMD() }
+
+func mockWrapMD() string {
 	return strings.Join([]string{
 		"Three settings control retries. Defaults are safe for most endpoints:",
 		"",
 		"| Setting | What it does | Default | Docs |",
 		"| --- | --- | --- | --- |",
 		"| `MaxRetries` | How many times a failed delivery is retried before the event is parked in the dead-letter queue. Retries use exponential backoff with full jitter, capped at **30 s** between attempts. | `3` | [Retry policy](https://example.com/retry) |",
-		"| **Backoff** | Exponential with jitter; ~~linear backoff~~ was removed in v2. | `500ms` | ![backoff-curve.png](https://example.com/backoff-curve.png) |",
+		"| **Backoff** | *Exponential* with jitter; ~~linear backoff~~ was removed in v2. | `500ms` | ![backoff-curve.png](https://example.com/backoff-curve.png) |",
 		"| Dead-letter queue | Parked events stay for 7 days. | On | [DLQ guide](https://example.com/dlq) |",
 		"",
 		"Pin the release you tested against:",
 		"",
 		"| Artifact | Source / checksum |",
 		"| --- | --- |",
-		"| webhook v2.4.1 | [https://pkg.go.dev/github.com/acme/webhook/v2@v2.4.1/retry#*Exponential*BackoffWithJitter](https://pkg.go.dev/github.com/acme/webhook/v2@v2.4.1/retry#ExponentialBackoffWithJitter) |",
+		"| webhook v2.4.1 | https://pkg.go.dev/github.com/acme/webhook/v2@v2.4.1/retry#ExponentialBackoffWithJitter |",
 		"| webhook-darwin-arm64.tar.gz | sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 |",
 	}, "\n")
 }
 
-func tableAlignMarkdown() string {
+func mockAlignMD() string {
 	return strings.Join([]string{
 		"All four regions passed. Latency is p95 over the 20-minute run:",
 		"",
@@ -71,20 +77,20 @@ func tableAlignMarkdown() string {
 		"| ap-northeast-1 | **Degraded** | **468 ms** | 402,877 | 0.31% |",
 		"| sa-east-1 | Pass | 297 ms | 88,409 | 0.05% |",
 		"",
-		"Status is centered and the two numeric columns are right-aligned because the table says `:---:` and `---:`; *Error rate* has no marker, so it stays left.",
+		"`Status` is centered and the two numeric columns are right-aligned because the table says `:---:` and `---:`; *Error rate* has no marker, so it stays left.",
 	}, "\n")
 }
 
-func tableDeliveriesMarkdown() string {
+func mockWideMD() string {
 	return strings.Join([]string{
 		"Seven deliveries failed between 06:00 and 09:00. The table is wider than the message, so it scrolls sideways:",
 		"",
-		"| Endpoint | Attempts | First try | Last try | Last status | Next action | Event |",
-		"| --- | ---: | --- | --- | --- | --- | --- |",
-		"| https://hooks.example.com/billing/v2 | 4 | 06:02:11 | 06:09:40 | 503 Service Unavailable | Retry at 09:30 | `evt_billing_1` |",
-		"| https://hooks.example.com/billing/v2 | 4 | 06:14:55 | 06:22:03 | 503 Service Unavailable | Retry at 09:30 | `evt_billing_2` |",
-		"| https://crm.internal.acme/webhooks | 2 | 07:41:30 | 07:41:52 | 401 Unauthorized | Parked: rotate secret | `evt_crm_1` |",
-		"| https://ops.example.org/alerts | 5 | 08:58:02 | 09:12:47 | Timeout after 10 s | Parked: check VPN | `evt_ops_1` |",
+		"| Event ID | Endpoint | Attempts | First try | Last try | Last status | Next action |",
+		"| --- | --- | --- | --- | --- | --- | --- |",
+		"| `evt_8Kq2` | https://hooks.example.com/billing/v2 | 4 | 06:02:11 | 06:09:40 | 503 Service Unavailable | Retry at 09:30 |",
+		"| `evt_8Kq9` | https://hooks.example.com/billing/v2 | 4 | 06:14:55 | 06:22:03 | 503 Service Unavailable | Retry at 09:30 |",
+		"| `evt_91Ta` | https://crm.internal/acme/webhooks | 2 | 07:41:30 | 07:41:52 | 401 Unauthorized | Parked: rotate key |",
+		"| `evt_93Zc` | https://ops.example.org/alerts | 5 | 08:58:02 | 09:12:47 | Timeout after 10 s | Parked: check endpoint |",
 		"",
 		"The two billing failures share an outage window; retrying them after 09:30 should be enough.",
 	}, "\n")
@@ -163,9 +169,9 @@ func TestTableDesignShots(t *testing.T) {
 		name, title, prompt, body string
 		wide                      bool
 	}{
-		{"table-wrap", "Cancel HTTP on close", "Which retry settings does the webhook client expose?", tableWrapMarkdown(), false},
-		{"table-align", "Cancel HTTP on close", "How did each region do in last night's load test?", tableAlignMarkdown(), false},
-		{"table-wide-scroll", "Cancel HTTP on close", "List the failed deliveries from this morning.", tableDeliveriesMarkdown(), true},
+		{"table-wrap", "Cancel HTTP on close", "Which retry settings does the webhook client expose?", mockWrapMD(), false},
+		{"table-align", "Cancel HTTP on close", "How did each region do in last night's load test?", mockAlignMD(), false},
+		{"table-wide-scroll", "Cancel HTTP on close", "List the failed deliveries from this morning.", mockWideMD(), true},
 	}
 	for _, fx := range fixtures {
 		for _, dark := range []bool{false, true} {
@@ -185,7 +191,7 @@ func TestTableDesignShots(t *testing.T) {
 			table := mustFind(t, tt, "table scroller")
 			switch fx.name {
 			case "table-wrap":
-				assertWrapShotGeometry(t, tt, table)
+				assertWrapShotGeometry(t, a, tt, table)
 			case "table-align":
 				assertAlignShotGeometry(t, tt, table)
 			case "table-wide-scroll":
@@ -197,17 +203,17 @@ func TestTableDesignShots(t *testing.T) {
 	}
 }
 
-func assertWrapShotGeometry(t *testing.T, tt *ui.Tester, table ui.Rect) {
+func assertWrapShotGeometry(t *testing.T, a *App, tt *ui.Tester, table ui.Rect) {
 	t.Helper()
 	if !tt.HasText("Exponential") || !tt.HasText("linear backoff") {
 		t.Fatalf("wrap fixture missing Exponential/linear backoff: %q", tt.Texts())
 	}
-	cols := tt.FindAll("table-col-1")
-	if len(cols) == 0 {
-		t.Fatalf("wrap What it does column missing")
+	lay := cachedTable(t, a, "MaxRetries")
+	if len(lay.widths) < 2 {
+		t.Fatalf("wrap table columns %v", lay.widths)
 	}
-	if cols[0].W > tableMaxCol+1 {
-		t.Fatalf("wrap column 1 exceeded 320: %.1f", cols[0].W)
+	if lay.widths[1] > tableMaxCol+1 {
+		t.Fatalf("wrap column 1 exceeded 320: %.1f", lay.widths[1])
 	}
 	if table.H <= tableMinRowH*4 {
 		t.Fatalf("wrap table did not grow with wrapped cells: %v", table)
@@ -227,14 +233,12 @@ func assertAlignShotGeometry(t *testing.T, tt *ui.Tester, table ui.Rect) {
 
 func assertWideShotGeometry(t *testing.T, a *App, tt *ui.Tester, table ui.Rect) {
 	t.Helper()
-	if !tt.HasText("evt_billing_1") {
-		t.Fatalf("wide fixture missing evt_ code: %q", tt.Texts())
+	if !tt.HasText("evt_8Kq2") || !tt.HasText("rotate key") || !tt.HasText("check endpoint") {
+		t.Fatalf("wide fixture missing mockup cells: %q", tt.Texts())
 	}
-	if len(tt.FindAll("table-col-6")) == 0 {
-		t.Fatalf("wide table is not 7 columns")
-	}
-	if len(tt.FindAll("table-col-7")) != 0 {
-		t.Fatalf("wide table has more than 7 columns")
+	lay := cachedTable(t, a, "evt_8Kq2")
+	if len(lay.widths) != 7 {
+		t.Fatalf("wide table has %d columns, want 7", len(lay.widths))
 	}
 	var slot *hScrollSlot
 	for _, s := range a.hScrolls {

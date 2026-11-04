@@ -372,8 +372,10 @@ type App struct {
 	// tableCache holds measured layouts of chat tables. Finished tables
 	// hit it every frame; only a still-open streaming table is measured
 	// again. tableCacheSeen drops layouts that this frame did not paint.
+	// tableMeasures is a test-only count of measureTable calls.
 	tableCache     map[string]*tableLayout
 	tableCacheSeen map[string]struct{}
+	tableMeasures  int
 
 	// Title generation. Jobs run off the frame. Fades and failures are
 	// drawn on the next frame. sideKeep holds sidebar rows that matched

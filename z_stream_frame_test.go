@@ -218,6 +218,7 @@ func TestFinishedTablesStreamBuild(t *testing.T) {
 	const tokens = 300
 	toks := longParagraph(tokens)
 	a, tt, fp, builds := openStream(t, 2880, 1800, 1, 0, true)
+	a.tableMeasures = 0
 	tableSamples := measureStreamFrom(t, a, tt, fp, builds, wrappingTablesPrefix(nBlock), toks)
 	b, tb, fp2, builds2 := openStream(t, 2880, 1800, 1, 0, true)
 	paraSamples := measureStreamFrom(t, b, tb, fp2, builds2, paragraphPrefix(nBlock), toks)
@@ -226,10 +227,10 @@ func TestFinishedTablesStreamBuild(t *testing.T) {
 	paraLate := percentile(column(paraSamples[len(paraSamples)-80:], func(s streamSample) time.Duration { return s.build }), 0.50)
 	tableP50 := percentile(column(tableSamples, func(s streamSample) time.Duration { return s.build }), 0.50)
 	paraP50 := percentile(column(paraSamples, func(s streamSample) time.Duration { return s.build }), 0.50)
-	t.Logf("finished wrapping tables + %d-token stream: n=%d p50=%s early p50=%s late p50=%s cache=%d", tokens, len(tableSamples), fmtDur(tableP50), fmtDur(tableEarly), fmtDur(tableLate), len(a.tableCache))
+	t.Logf("finished wrapping tables + %d-token stream: n=%d p50=%s early p50=%s late p50=%s measures=%d", tokens, len(tableSamples), fmtDur(tableP50), fmtDur(tableEarly), fmtDur(tableLate), a.tableMeasures)
 	t.Logf("finished paragraphs + %d-token stream: n=%d p50=%s late p50=%s", tokens, len(paraSamples), fmtDur(paraP50), fmtDur(paraLate))
-	if len(a.tableCache) < nBlock {
-		t.Fatalf("expected at least %d cached tables, got %d", nBlock, len(a.tableCache))
+	if a.tableMeasures != nBlock {
+		t.Fatalf("measureTable ran %d times, want %d (once per finished table)", a.tableMeasures, nBlock)
 	}
 	if tableLate > tableEarly+2*time.Millisecond {
 		t.Fatalf("wrapping-table stream build grew from %s to %s", tableEarly, tableLate)

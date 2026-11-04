@@ -547,43 +547,47 @@ func TestTableOverflowScrollsWithFades(t *testing.T) {
 	assertTableEdge(t, tt, "wide left", "Column 1 heading", false)
 }
 
+func cachedTable(t *testing.T, a *App, contains string) *tableLayout {
+	t.Helper()
+	for _, lay := range a.tableCache {
+		if contains == "" || strings.Contains(lay.src, contains) {
+			return lay
+		}
+	}
+	t.Fatalf("no cached table containing %q (n=%d)", contains, len(a.tableCache))
+	return nil
+}
+
 func TestTableColumnWidths(t *testing.T) {
 	body := "| A | Longer header |\n| --- | --- |\n| A | x |\n"
-	_, tt := openTable(t, body)
-	col0 := tt.FindAll("table-col-0")
-	col1 := tt.FindAll("table-col-1")
-	if len(col0) < 2 || len(col1) < 2 {
-		t.Fatalf("missing column boxes: col0 %d col1 %d in %q", len(col0), len(col1), tt.Texts())
+	a, tt := openTable(t, body)
+	lay := cachedTable(t, a, "Longer header")
+	if len(lay.widths) != 2 {
+		t.Fatalf("columns %v", lay.widths)
 	}
-	if abs32(col0[0].W-col0[1].W) > 1 {
-		t.Fatalf("column 0 width mismatch header %.1f body %.1f", col0[0].W, col0[1].W)
+	if lay.widths[1] <= lay.widths[0] {
+		t.Fatalf("longer header is not the wider column: %.1f vs %.1f", lay.widths[1], lay.widths[0])
 	}
-	if abs32(col1[0].W-col1[1].W) > 1 {
-		t.Fatalf("column 1 width mismatch header %.1f body %.1f", col1[0].W, col1[1].W)
-	}
-	if col1[0].W <= col0[0].W {
-		t.Fatalf("longer header is not the wider column: %.1f vs %.1f", col1[0].W, col0[0].W)
-	}
-	if col0[0].W > tableMaxCol || col1[0].W > tableMaxCol {
-		t.Fatalf("column exceeded 320: %.1f %.1f", col0[0].W, col1[0].W)
+	if lay.widths[0] > tableMaxCol || lay.widths[1] > tableMaxCol {
+		t.Fatalf("column exceeded 320: %.1f %.1f", lay.widths[0], lay.widths[1])
 	}
 	table := mustFind(t, tt, "table scroller")
-	if abs32(table.W-(col0[0].W+col1[0].W)) > 1 {
-		t.Fatalf("table width %.1f != sum of columns %.1f+%.1f", table.W, col0[0].W, col1[0].W)
+	if abs32(table.W-(lay.widths[0]+lay.widths[1])) > 1 {
+		t.Fatalf("table width %.1f != sum of columns %.1f+%.1f", table.W, lay.widths[0], lay.widths[1])
 	}
 }
 
 func TestTableHeaderWraps(t *testing.T) {
 	head := strings.Repeat("HeaderWrap ", 18)
 	body := "| " + head + " |\n| --- |\n| x |\n"
-	_, tt := openTable(t, body)
+	a, tt := openTable(t, body)
 	table := mustFind(t, tt, "table scroller")
-	col := tt.FindAll("table-col-0")
-	if len(col) < 1 {
-		t.Fatalf("missing header column in %q", tt.Texts())
+	lay := cachedTable(t, a, "HeaderWrap")
+	if len(lay.widths) != 1 {
+		t.Fatalf("columns %v", lay.widths)
 	}
-	if col[0].W > tableMaxCol+1 || col[0].W < tableMaxCol-8 {
-		t.Fatalf("wrapped header column %.1f, want 320", col[0].W)
+	if lay.widths[0] > tableMaxCol+1 || lay.widths[0] < tableMaxCol-8 {
+		t.Fatalf("wrapped header column %.1f, want 320", lay.widths[0])
 	}
 	if table.H <= tableMinRowH*2 {
 		t.Fatalf("header did not wrap: table %v", table)
@@ -601,14 +605,14 @@ func TestTableWrappedLinePitchIs20(t *testing.T) {
 	if n < 2 {
 		t.Fatalf("expected wrap, got %d lines (natural %.1f inner %.1f)", n, nat, inner)
 	}
-	_, tt := openTable(t, body)
+	a, tt := openTable(t, body)
 	table := mustFind(t, tt, "table scroller")
-	cols := tt.FindAll("table-col-1")
-	if len(cols) < 1 {
-		t.Fatalf("missing What it does column")
+	lay := cachedTable(t, a, "failed delivery")
+	if len(lay.widths) < 2 {
+		t.Fatalf("columns %v", lay.widths)
 	}
-	if cols[0].W > tableMaxCol+1 {
-		t.Fatalf("wrapped column %.1f", cols[0].W)
+	if lay.widths[1] > tableMaxCol+1 {
+		t.Fatalf("wrapped column %.1f", lay.widths[1])
 	}
 	want := tableRowHeight(1, true) + tableRowHeight(n, false)
 	if abs32(table.H-want) > 1 {
@@ -634,6 +638,27 @@ func TestTableCopyIncludesLinkText(t *testing.T) {
 	got := tt.Clipboard()
 	if !strings.Contains(got, "docs") {
 		t.Fatalf("copied selection missing link text: %q", got)
+	}
+}
+
+func TestTableMeasureOnceAcrossThemeFade(t *testing.T) {
+	a := tableShotApp(t, tableWrapMarkdown())
+	a.instant = false
+	tt := ui.NewTester(a.view, shotW, shotH)
+	tt.Frame()
+	if a.tableMeasures != 2 {
+		t.Fatalf("measureTable %d after first paint, want 2", a.tableMeasures)
+	}
+	a.data.Theme = themes.ThemeTide
+	tt.Frame()
+	if a.blendStart.IsZero() {
+		t.Fatal("theme crossfade did not start")
+	}
+	for i := 0; i < 16 && !a.blendStart.IsZero(); i++ {
+		tt.Advance(16 * time.Millisecond)
+	}
+	if a.tableMeasures != 2 {
+		t.Fatalf("theme crossfade called measureTable %d times, want 2 (once per table)", a.tableMeasures)
 	}
 }
 

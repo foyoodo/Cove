@@ -34,10 +34,11 @@ type tableCell struct {
 }
 
 // tableLayout is the measured geometry of one chat table. Column widths
-// do not depend on the message width: the cap is a fixed 320pt.
+// do not depend on the message width: the cap is a fixed 320pt. Colors
+// are applied at paint time so a theme crossfade does not remeasure.
 type tableLayout struct {
 	src     string
-	theme   string
+	geom    string
 	rows    [][]tableCell
 	widths  []float32
 	heights []float32
@@ -46,7 +47,11 @@ type tableLayout struct {
 }
 
 func (a *App) beginTableCache() {
-	a.tableCacheSeen = make(map[string]struct{}, len(a.tableCache))
+	if a.tableCacheSeen == nil {
+		a.tableCacheSeen = make(map[string]struct{}, 8)
+		return
+	}
+	clear(a.tableCacheSeen)
 }
 
 func (a *App) endTableCache() {
@@ -57,16 +62,12 @@ func (a *App) endTableCache() {
 	}
 }
 
-func tableThemeKey(p Theme) string {
-	return colorKey(p.TextPrimary) + "/" + colorKey(p.TextSecondary) + "/" + colorKey(p.TextLink) + "/" + colorKey(p.CodeInlineBg) + "/" + colorKey(p.CodeInlineText) + "/" + itoa(int(tableBodySize))
+func tableGeomKey() string {
+	return itoa(int(tableBodySize)) + "/" + itoa(int(tableCodeSize)) + "/" + itoa(int(tableLineH)) + "/" + itoa(int(tableMaxCol))
 }
 
-func colorKey(c ui.Color) string {
-	return itoa(int(c.R)) + "," + itoa(int(c.G)) + "," + itoa(int(c.B)) + "," + itoa(int(c.A))
-}
-
-func tableCacheID(msg string, start int, theme string) string {
-	return msg + "/" + itoa(start) + "/" + theme
+func tableCacheID(msg string, start int, geom string) string {
+	return msg + "/" + itoa(start) + "/" + geom
 }
 
 func tableRowHeight(lines int, header bool) float32 {
@@ -97,14 +98,14 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 		return false
 	}
 	tableSrc := src[b.Start:b.End]
-	theme := tableThemeKey(a.look)
-	id := tableCacheID(a.hScrollMsg, b.Start, theme)
+	geom := tableGeomKey()
+	id := tableCacheID(a.hScrollMsg, b.Start, geom)
 	if a.tableCacheSeen != nil {
 		a.tableCacheSeen[id] = struct{}{}
 	}
 	lay := a.tableCache[id]
-	if lay == nil || lay.src != tableSrc || lay.theme != theme {
-		lay = a.measureTable(c, d, i, tableSrc, theme)
+	if lay == nil || lay.src != tableSrc || lay.geom != geom {
+		lay = a.measureTable(c, d, i, tableSrc, geom)
 		if a.tableCache == nil {
 			a.tableCache = map[string]*tableLayout{}
 		}
@@ -114,7 +115,8 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 	return true
 }
 
-func (a *App) measureTable(c *ui.Context, d *parser.Document, i int, src, theme string) *tableLayout {
+func (a *App) measureTable(c *ui.Context, d *parser.Document, i int, src, geom string) *tableLayout {
+	a.tableMeasures++
 	b := d.Block(i)
 	p := a.look
 	var rows [][]tableCell
@@ -184,7 +186,7 @@ func (a *App) measureTable(c *ui.Context, d *parser.Document, i int, src, theme 
 		total += w
 	}
 	aligns := append([]parser.Align(nil), b.Align...)
-	return &tableLayout{src: src, theme: theme, rows: rows, widths: widths, heights: heights, total: total, aligns: aligns}
+	return &tableLayout{src: src, geom: geom, rows: rows, widths: widths, heights: heights, total: total, aligns: aligns}
 }
 
 func (a *App) paintTableLayout(c *ui.Context, lay *tableLayout, i int) {
@@ -229,7 +231,7 @@ func (a *App) paintTableLayout(c *ui.Context, lay *tableLayout, i int) {
 									if cell.head || cell.first {
 										color = p.TextPrimary
 									}
-									cellBox := ui.Column(c).Width(lay.widths[k]).FillHeight().Padding(padTop, tableCellPadX, tableCellPadY, tableCellPadX).AlignItems(ui.Stretch).Justify(ui.Start).Shrink(0).Label("table-col-" + itoa(k))
+									cellBox := ui.Column(c).Width(lay.widths[k]).FillHeight().Padding(padTop, tableCellPadX, tableCellPadY, tableCellPadX).AlignItems(ui.Stretch).Justify(ui.Start).Shrink(0)
 									cellBox.Children(func() {
 										a.paintCellText(c, cell.pieces, color, cell.head, tableAlign(lay.aligns, k))
 									})
@@ -430,6 +432,40 @@ func addCellSpan(out *[]cellPiece, st inlineStyle, p Theme, sp ui.Span) {
 	})
 }
 
+// themePieces copies cell runs and stamps the current palette. Geometry
+// is cached without colors, so a theme or accent crossfade only repaints.
+func themePieces(pieces []cellPiece, p Theme) []cellPiece {
+	if len(pieces) == 0 {
+		return pieces
+	}
+	out := make([]cellPiece, len(pieces))
+	for i, pc := range pieces {
+		out[i] = pc
+		if len(pc.spans) == 0 {
+			continue
+		}
+		spans := make([]ui.Span, len(pc.spans))
+		copy(spans, pc.spans)
+		for j := range spans {
+			sp := &spans[j]
+			code := sp.Font == "ui-monospace" && sp.Radius == 4
+			if code {
+				sp.Background = p.CodeInlineBg
+			}
+			switch {
+			case pc.dest != "" && !pc.pending:
+				sp.Color = p.TextLink
+			case code:
+				sp.Color = p.CodeInlineText
+			case sp.Font == "ui-monospace":
+				sp.Color = p.TextSecondary
+			}
+		}
+		out[i].spans = spans
+	}
+	return out
+}
+
 func flattenCellPieces(pieces []cellPiece) []ui.Span {
 	var n int
 	for _, pc := range pieces {
@@ -468,6 +504,7 @@ func imageCellName(dest string) string {
 }
 
 func (a *App) paintCellText(c *ui.Context, pieces []cellPiece, color ui.Color, head bool, align ui.Align) {
+	pieces = themePieces(pieces, a.look)
 	rest := pieces
 	var el ui.Element
 	switch {
