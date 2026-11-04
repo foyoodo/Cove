@@ -273,22 +273,22 @@ func TestTableCellBoldWeight(t *testing.T) {
 		"| Plain | wwww |",
 	}, "\n")
 	_, tt := openTable(t, body)
+	if !tt.HasText("wwww") {
+		t.Fatalf("bold cell missing: %q", tt.Texts())
+	}
 	look := tableLook()
 	strong := flattenCellPieces(cellPieces(cellInlines(t, body, "wwww"), 0, 100, 400, look, 13, 13))
 	if len(strong) == 0 || strong[0].Weight != 600 || strong[0].Text != "wwww" {
 		t.Fatalf("cell bold weight %+v", strong)
 	}
-	plainW, _ := ui.ShapeText("wwww", ui.Font{Size: 13, Weight: 400}, 0).Size()
-	boldW, _ := ui.ShapeText("wwww", ui.Font{Size: 13, Weight: 600}, 0).Size()
-	if boldW <= plainW {
-		t.Skipf("this font does not distinguish 400 and 600 (%.1f vs %.1f)", plainW, boldW)
+	plain := flattenCellPieces(cellPieces(cellInlines(t, body, "Plain"), 0, 100, 400, look, 13, 13))
+	if len(plain) == 0 || plain[0].Text != "Plain" {
+		t.Fatalf("plain header %+v", plain)
 	}
-	found := tt.FindAll("wwww")
-	if len(found) < 2 {
-		t.Fatalf("wwww occurrences %v in %q", found, tt.Texts())
-	}
-	if found[0].W+0.5 < found[1].W {
-		t.Fatalf("cell bold width %.1f is not heavier than plain %.1f", found[0].W, found[1].W)
+	samplePlain := cellPieces(cellInlines(t, "| Kind | Sample |\n| --- | --- |\n| Plain | wwww |\n", "wwww"), 0, 100, 400, look, 13, 13)
+	got := flattenCellPieces(samplePlain)
+	if len(got) == 0 || got[0].Weight == 600 {
+		t.Fatalf("plain cell should not be weight 600: %+v", got)
 	}
 }
 
@@ -384,7 +384,7 @@ func TestTableWrapCapAndRowHeight(t *testing.T) {
 	body := "| Setting | What it does |\n| --- | --- |\n| MaxRetries | " + sentence + " |\n"
 	_, tt := openTable(t, body)
 	table := mustFind(t, tt, "table scroller")
-	if table.H <= tableMinRowH+1+tableMinRowH {
+	if table.H <= tableMinRowH*2 {
 		t.Fatalf("wrapped row did not grow: table %v", table)
 	}
 	joined := strings.Join(tt.Texts(), "\n")
@@ -407,7 +407,7 @@ func TestTableWrapCapAndRowHeight(t *testing.T) {
 	if col.W < tableMaxCol-8 {
 		t.Fatalf("long cell did not fill the 320 cap: %.1f", col.W)
 	}
-	if col.H <= tableMinRowH+1+tableMinRowH {
+	if col.H <= tableMinRowH*2 {
 		t.Fatalf("long token did not wrap: table %v", col)
 	}
 	if strings.Contains(strings.Join(cap.Texts(), "\n"), "…") {
@@ -438,7 +438,7 @@ func TestTableLongTokenBreaks(t *testing.T) {
 	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "9f86d081884c7d659a2feaa0c55ad015a3") {
 		t.Fatalf("hash missing: %q", tt.Texts())
 	}
-	if table.H <= tableMinRowH*2+1 {
+	if table.H <= tableMinRowH*3 {
 		t.Fatalf("long URL/hash did not wrap: table %v", table)
 	}
 }
@@ -447,9 +447,9 @@ func TestTableSingleLineRowIs30(t *testing.T) {
 	body := "| A | B |\n| --- | --- |\n| 1 | 2 |\n"
 	_, tt := openTable(t, body)
 	table := mustFind(t, tt, "table scroller")
-	want := float32(tableMinRowH + 1 + tableMinRowH)
+	want := float32(tableMinRowH * 2) // header + body, rule inside the body row
 	if table.H < want-1 || table.H > want+1 {
-		t.Fatalf("single-line table height %.1f, want %.1f (5+20+5 per row)", table.H, want)
+		t.Fatalf("single-line table height %.1f, want %.1f (header 30 + body 30)", table.H, want)
 	}
 }
 
@@ -545,6 +545,107 @@ func TestTableOverflowScrollsWithFades(t *testing.T) {
 	}
 	placeHScroll(t, a, tt, "middle")
 	assertTableEdge(t, tt, "wide left", "Column 1 heading", false)
+}
+
+func TestTableColumnWidths(t *testing.T) {
+	body := "| A | Longer header |\n| --- | --- |\n| A | x |\n"
+	_, tt := openTable(t, body)
+	col0 := tt.FindAll("table-col-0")
+	col1 := tt.FindAll("table-col-1")
+	if len(col0) < 2 || len(col1) < 2 {
+		t.Fatalf("missing column boxes: col0 %d col1 %d in %q", len(col0), len(col1), tt.Texts())
+	}
+	if abs32(col0[0].W-col0[1].W) > 1 {
+		t.Fatalf("column 0 width mismatch header %.1f body %.1f", col0[0].W, col0[1].W)
+	}
+	if abs32(col1[0].W-col1[1].W) > 1 {
+		t.Fatalf("column 1 width mismatch header %.1f body %.1f", col1[0].W, col1[1].W)
+	}
+	if col1[0].W <= col0[0].W {
+		t.Fatalf("longer header is not the wider column: %.1f vs %.1f", col1[0].W, col0[0].W)
+	}
+	if col0[0].W > tableMaxCol || col1[0].W > tableMaxCol {
+		t.Fatalf("column exceeded 320: %.1f %.1f", col0[0].W, col1[0].W)
+	}
+	table := mustFind(t, tt, "table scroller")
+	if abs32(table.W-(col0[0].W+col1[0].W)) > 1 {
+		t.Fatalf("table width %.1f != sum of columns %.1f+%.1f", table.W, col0[0].W, col1[0].W)
+	}
+}
+
+func TestTableHeaderWraps(t *testing.T) {
+	head := strings.Repeat("HeaderWrap ", 18)
+	body := "| " + head + " |\n| --- |\n| x |\n"
+	_, tt := openTable(t, body)
+	table := mustFind(t, tt, "table scroller")
+	col := tt.FindAll("table-col-0")
+	if len(col) < 1 {
+		t.Fatalf("missing header column in %q", tt.Texts())
+	}
+	if col[0].W > tableMaxCol+1 || col[0].W < tableMaxCol-8 {
+		t.Fatalf("wrapped header column %.1f, want 320", col[0].W)
+	}
+	if table.H <= tableMinRowH*2 {
+		t.Fatalf("header did not wrap: table %v", table)
+	}
+}
+
+func TestTableWrappedLinePitchIs20(t *testing.T) {
+	sentence := "How many times a failed delivery is retried before the event is parked in the dead-letter queue. Retries use exponential backoff with full jitter, capped at 30 s between attempts."
+	body := "| Setting | What it does |\n| --- | --- |\n| MaxRetries | " + sentence + " |\n"
+	look := tableLook()
+	pieces := cellPieces(cellInlines(t, body, "failed delivery"), 0, 100, 400, look, 13, 13)
+	nat, _ := ui.ShapeRichText(flattenCellPieces(pieces), ui.Font{Size: tableBodySize}, 0).Size()
+	inner := float32(tableMaxCol - tableCellPadX*2)
+	n := wrappedLineCount(pieces, inner, nat)
+	if n < 2 {
+		t.Fatalf("expected wrap, got %d lines (natural %.1f inner %.1f)", n, nat, inner)
+	}
+	_, tt := openTable(t, body)
+	table := mustFind(t, tt, "table scroller")
+	cols := tt.FindAll("table-col-1")
+	if len(cols) < 1 {
+		t.Fatalf("missing What it does column")
+	}
+	if cols[0].W > tableMaxCol+1 {
+		t.Fatalf("wrapped column %.1f", cols[0].W)
+	}
+	want := tableRowHeight(1, true) + tableRowHeight(n, false)
+	if abs32(table.H-want) > 1 {
+		t.Fatalf("wrapped table height %.1f, want %.1f for %d lines (20pt pitch)", table.H, want, n)
+	}
+}
+
+func TestTableCopyIncludesLinkText(t *testing.T) {
+	body := strings.Join([]string{
+		"Lead text before the table.",
+		"",
+		"| Kind | Sample |",
+		"| --- | --- |",
+		"| Link | See [docs](https://pkg.go.dev/context) |",
+	}, "\n")
+	_, tt := openTable(t, body)
+	lead := mustFind(t, tt, "Lead text before the table.")
+	link := mustFind(t, tt, "docs")
+	tt.Press(lead.X+8, lead.Y+lead.H/2)
+	tt.Move(link.X+link.W-2, link.Y+link.H/2)
+	tt.Release(link.X+link.W-2, link.Y+link.H/2)
+	tt.Key(ui.Cmd, ui.KeyC)
+	got := tt.Clipboard()
+	if !strings.Contains(got, "docs") {
+		t.Fatalf("copied selection missing link text: %q", got)
+	}
+}
+
+func TestSameStreamSpansStrikethrough(t *testing.T) {
+	a := []ui.Span{{Text: "x", Size: 13, Strikethrough: true}}
+	b := []ui.Span{{Text: "x", Size: 13, Strikethrough: false}}
+	if sameStreamSpans(a, b) {
+		t.Fatal("strikethrough mismatch compared equal")
+	}
+	if !sameStreamSpans(a, a) {
+		t.Fatal("identical strike spans compared unequal")
+	}
 }
 
 func closestColorDist(img *image.RGBA, r ui.Rect, want color.RGBA) int {

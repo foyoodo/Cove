@@ -369,6 +369,11 @@ type App struct {
 	// hScrollMsg is the message whose markdown is being built.
 	hScrolls   map[string]*hScrollSlot
 	hScrollMsg string
+	// tableCache holds measured layouts of chat tables. Finished tables
+	// hit it every frame; only a still-open streaming table is measured
+	// again. tableCacheSeen drops layouts that this frame did not paint.
+	tableCache     map[string]*tableLayout
+	tableCacheSeen map[string]struct{}
 
 	// Title generation. Jobs run off the frame. Fades and failures are
 	// drawn on the next frame. sideKeep holds sidebar rows that matched

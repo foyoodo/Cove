@@ -23,31 +23,107 @@ const (
 	tableCodeSize = 13
 )
 
+// tableCell is one measured cell. Width is unwrapped text; lines is how
+// many FixedLineHeight(20) rows the painted text occupies.
+type tableCell struct {
+	pieces []cellPiece
+	width  float32
+	lines  int
+	head   bool
+	first  bool
+}
+
+// tableLayout is the measured geometry of one chat table. Column widths
+// do not depend on the message width: the cap is a fixed 320pt.
+type tableLayout struct {
+	src     string
+	theme   string
+	rows    [][]tableCell
+	widths  []float32
+	heights []float32
+	total   float32
+	aligns  []parser.Align
+}
+
+func (a *App) beginTableCache() {
+	a.tableCacheSeen = make(map[string]struct{}, len(a.tableCache))
+}
+
+func (a *App) endTableCache() {
+	for k := range a.tableCache {
+		if _, ok := a.tableCacheSeen[k]; !ok {
+			delete(a.tableCache, k)
+		}
+	}
+}
+
+func tableThemeKey(p Theme) string {
+	return colorKey(p.TextPrimary) + "/" + colorKey(p.TextSecondary) + "/" + colorKey(p.TextLink) + "/" + colorKey(p.CodeInlineBg) + "/" + colorKey(p.CodeInlineText) + "/" + itoa(int(tableBodySize))
+}
+
+func colorKey(c ui.Color) string {
+	return itoa(int(c.R)) + "," + itoa(int(c.G)) + "," + itoa(int(c.B)) + "," + itoa(int(c.A))
+}
+
+func tableCacheID(msg string, start int, theme string) string {
+	return msg + "/" + itoa(start) + "/" + theme
+}
+
+func tableRowHeight(lines int, header bool) float32 {
+	if lines < 1 {
+		lines = 1
+	}
+	if header {
+		return tableCellPadY*2 + float32(lines)*tableLineH
+	}
+	// SPEC §5.4.1: 1px rule + 4 + 20×n + 5. The rule sits in the row's
+	// top padding, so a single-line body row is 30, not 31.
+	return 1 + (tableCellPadY - 1) + float32(lines)*tableLineH + tableCellPadY
+}
+
 // renderTable draws a markdown table with the token surfaces and
-// horizontal rules only. Each column is min(max(natural, header min),
-// 320), padding included. Text wraps inside that cap; the table hugs
-// the sum of the columns and only scrolls when that sum is wider than
-// the message. The stock markdown table always paints a vertical border
-// on each cell, so the table block is replaced here.
+// horizontal rules only. Each column is min(natural + padding, 320).
+// Text wraps inside that cap; the table hugs the sum of the columns
+// and only scrolls when that sum is wider than the message. The stock
+// markdown table always paints a vertical border on each cell, so the
+// table block is replaced here.
 func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 	b := d.Block(i)
 	if b.Kind != parser.Table {
 		return false
 	}
-	p := a.look
-	type cell struct {
-		pieces []cellPiece
-		width  float32
-		head   bool
-		first  bool
+	src := d.Source()
+	if b.Start < 0 || b.End > len(src) || b.Start > b.End {
+		return false
 	}
-	var rows [][]cell
+	tableSrc := src[b.Start:b.End]
+	theme := tableThemeKey(a.look)
+	id := tableCacheID(a.hScrollMsg, b.Start, theme)
+	if a.tableCacheSeen != nil {
+		a.tableCacheSeen[id] = struct{}{}
+	}
+	lay := a.tableCache[id]
+	if lay == nil || lay.src != tableSrc || lay.theme != theme {
+		lay = a.measureTable(c, d, i, tableSrc, theme)
+		if a.tableCache == nil {
+			a.tableCache = map[string]*tableLayout{}
+		}
+		a.tableCache[id] = lay
+	}
+	a.paintTableLayout(c, lay, i)
+	return true
+}
+
+func (a *App) measureTable(c *ui.Context, d *parser.Document, i int, src, theme string) *tableLayout {
+	b := d.Block(i)
+	p := a.look
+	var rows [][]tableCell
 	for r := i + 1; r < b.Next; r = d.Block(r).Next {
 		row := d.Block(r)
 		if row.Kind != parser.TableRow {
 			continue
 		}
-		var line []cell
+		var line []tableCell
 		k := 0
 		for ci := r + 1; ci < row.Next; ci = d.Block(ci).Next {
 			cb := d.Block(ci)
@@ -60,7 +136,7 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 			}
 			pieces := cellPieces(d.Inlines(ci), 0, len(d.Inlines(ci)), weight, p, tableBodySize, tableCodeSize)
 			w := measurePieces(c, pieces)
-			line = append(line, cell{pieces: pieces, width: w, head: row.Header, first: k == 0})
+			line = append(line, tableCell{pieces: pieces, width: w, head: row.Header, first: k == 0})
 			k++
 		}
 		if len(line) > 0 {
@@ -74,24 +150,16 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 		}
 	}
 	natural := make([]float32, cols)
-	headerMin := make([]float32, cols)
 	for _, row := range rows {
 		for k, cell := range row {
 			if cell.width > natural[k] {
 				natural[k] = cell.width
-			}
-			if cell.head && cell.width > headerMin[k] {
-				headerMin[k] = cell.width
 			}
 		}
 	}
 	widths := make([]float32, cols)
 	for k := range widths {
 		w := natural[k] + tableCellPadX*2
-		minW := headerMin[k] + tableCellPadX*2
-		if w < minW {
-			w = minW
-		}
 		if w > tableMaxCol {
 			w = tableMaxCol
 		}
@@ -99,26 +167,30 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 	}
 	heights := make([]float32, len(rows))
 	for ri, row := range rows {
-		h := float32(tableMinRowH)
-		for k, cell := range row {
+		header := len(row) > 0 && row[0].head
+		maxLines := 1
+		for k := range row {
 			inner := widths[k] - tableCellPadX*2
-			ch := tableCellPadY*2 + float32(wrappedLineCount(cell.pieces, inner, cell.width))*tableLineH
-			if ch > h {
-				h = ch
+			n := wrappedLineCount(row[k].pieces, inner, row[k].width)
+			row[k].lines = n
+			if n > maxLines {
+				maxLines = n
 			}
 		}
-		heights[ri] = h
+		heights[ri] = tableRowHeight(maxLines, header)
 	}
-
-	// Wider than the message, the table scrolls inside it. A shrink-wrapped
-	// grid would otherwise run under the card clip. The header scrolls
-	// with the rows. Text and rules fade to transparent at the viewport
-	// edges; the row surfaces stay behind them, clipped by the outline.
-	slot := a.hScrollSlot(a.hScrollKey("table", i))
 	var total float32
 	for _, w := range widths {
 		total += w
 	}
+	aligns := append([]parser.Align(nil), b.Align...)
+	return &tableLayout{src: src, theme: theme, rows: rows, widths: widths, heights: heights, total: total, aligns: aligns}
+}
+
+func (a *App) paintTableLayout(c *ui.Context, lay *tableLayout, i int) {
+	p := a.look
+	total := lay.total
+	slot := a.hScrollSlot(a.hScrollKey("table", i))
 	// Hug the columns when they fit; MaxWidthPercent keeps an overflowing
 	// table inside the message so ScrollHorizontal can take over.
 	ui.Box(c).Width(total).MaxWidthPercent(100).MinWidth(0).AlignSelf(ui.Start).Radius(radiusCode).Clip().Children(func() {
@@ -127,12 +199,9 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 			a.fadeColors(stack)
 			stack.Children(func() {
 				ui.Column(c).Width(total).Shrink(0).Children(func() {
-					for ri, row := range rows {
-						if ri > 0 {
-							ui.Box(c).Height(1).Width(total)
-						}
-						bar := ui.Box(c).Height(heights[ri]).Width(total)
-						if row[0].head {
+					for ri, row := range lay.rows {
+						bar := ui.Box(c).Height(lay.heights[ri]).Width(total)
+						if len(row) > 0 && row[0].head {
 							bar.Background(p.TableHeader)
 						}
 					}
@@ -142,34 +211,36 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 					front.Effect(fx)
 				}
 				front.Children(func() {
-					for ri, row := range rows {
-						if ri > 0 {
-							ui.Box(c).Height(1).Width(total).Background(p.TableRule)
-						}
-						rowH := heights[ri]
-						line := ui.Row(c).Height(rowH).AlignItems(ui.Stretch).Shrink(0)
-						line.Children(func() {
-							for k, cell := range row {
-								w := float32(80)
-								if k < len(widths) {
-									w = widths[k]
-								}
-								color := p.TextSecondary
-								if cell.head || cell.first {
-									color = p.TextPrimary
-								}
-								box := ui.Column(c).Width(w).Height(rowH).Padding(tableCellPadY, tableCellPadX).AlignItems(ui.Stretch).Justify(ui.Start).Shrink(0)
-								box.Children(func() {
-									a.paintCellText(c, cell.pieces, color, cell.head, tableAlign(b.Align, k))
-								})
+					for ri, row := range lay.rows {
+						header := len(row) > 0 && row[0].head
+						box := ui.Column(c).Width(total).Height(lay.heights[ri]).Shrink(0)
+						box.Children(func() {
+							if !header {
+								ui.Box(c).Height(1).Width(total).Background(p.TableRule)
 							}
+							line := ui.Row(c).Grow(1).AlignItems(ui.Stretch).MinHeight(0)
+							line.Children(func() {
+								for k, cell := range row {
+									padTop := float32(tableCellPadY)
+									if !header {
+										padTop = tableCellPadY - 1
+									}
+									color := p.TextSecondary
+									if cell.head || cell.first {
+										color = p.TextPrimary
+									}
+									cellBox := ui.Column(c).Width(lay.widths[k]).FillHeight().Padding(padTop, tableCellPadX, tableCellPadY, tableCellPadX).AlignItems(ui.Stretch).Justify(ui.Start).Shrink(0).Label("table-col-" + itoa(k))
+									cellBox.Children(func() {
+										a.paintCellText(c, cell.pieces, color, cell.head, tableAlign(lay.aligns, k))
+									})
+								}
+							})
 						})
 					}
 				})
 			})
 		})
 	})
-	return true
 }
 
 func tableAlign(aligns []parser.Align, k int) ui.Align {
@@ -199,9 +270,6 @@ func wrappedLineCount(pieces []cellPiece, wrapW, natural float32) int {
 	if wrapW < 8 {
 		wrapW = 8
 	}
-	// Streaming replies include many short tables. Shaping every cell
-	// every token is what blew the structured-build growth check; a cell
-	// whose unwrapped width already fits is as many lines as its breaks.
 	if natural <= wrapW {
 		return hard
 	}
@@ -210,24 +278,35 @@ func wrappedLineCount(pieces []cellPiece, wrapW, natural float32) int {
 		return 1
 	}
 	layout := ui.ShapeRichText(spans, ui.Font{Size: tableBodySize}, wrapW)
-	_, h := layout.Size()
-	if h <= 0 {
-		return hard
-	}
-	lh := layout.Caret(0).H
-	if lh < 8 {
-		lh = tableLineH
-	}
-	n := int(math.Round(float64(h / lh)))
+	n := shapedLineCount(layout)
 	if n < hard {
 		n = hard
 	}
 	return n
 }
 
+func shapedLineCount(layout *ui.TextLayout) int {
+	n := 1
+	y := layout.Caret(0).Y
+	i := 0
+	for step := 0; step < 20000; step++ {
+		j := layout.NextBoundary(i)
+		if j <= i {
+			break
+		}
+		cy := layout.Caret(j).Y
+		if cy > y+0.5 {
+			n++
+			y = cy
+		}
+		i = j
+	}
+	return n
+}
+
 // cellPiece is one run of a table cell, or of a streaming paragraph.
 // dest is set for a link, which paints as ui.Link so clicks and hover
-// match a paragraph. Phase 2 can wrap these runs without flattening.
+// match a paragraph.
 type cellPiece struct {
 	spans   []ui.Span
 	dest    string
@@ -686,7 +765,7 @@ func sameStreamSpans(a, b []ui.Span) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Text != b[i].Text || a[i].Font != b[i].Font || a[i].Size != b[i].Size || a[i].Weight != b[i].Weight || a[i].Italic != b[i].Italic || a[i].Color != b[i].Color || a[i].Background != b[i].Background {
+		if a[i].Text != b[i].Text || a[i].Font != b[i].Font || a[i].Size != b[i].Size || a[i].Weight != b[i].Weight || a[i].Italic != b[i].Italic || a[i].Strikethrough != b[i].Strikethrough || a[i].Color != b[i].Color || a[i].Background != b[i].Background {
 			return false
 		}
 	}

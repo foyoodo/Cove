@@ -179,7 +179,8 @@ func assertTableEdge(t *testing.T, tt *ui.Tester, mode, header string, right boo
 	// The page behind the table is a gradient, so a row's own background
 	// is the empty pixel of that row just beside the band, not a pixel
 	// from the middle of the viewport.
-	// Header, then each body row. Rules are 1px between 30px rows.
+	// Header, then each body row. The 1px rule sits inside the body's
+	// top padding, so each row is 30pt.
 	y := table.Y
 	rows := 0
 	var headerOwn, headerEdge, bodyOwn, bodyEdge color.RGBA
@@ -207,7 +208,7 @@ func assertTableEdge(t *testing.T, tt *ui.Tester, mode, header string, right boo
 			bodyOwn, bodyEdge = own, edge
 		}
 		rows++
-		y += 31
+		y += 30
 	}
 	if rows < 2 {
 		t.Fatalf("%s expected header and a body row, table %v", mode, table)

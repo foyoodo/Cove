@@ -164,6 +164,81 @@ func priorMessages(n int) []Message {
 	return out
 }
 
+func wrappingTablesPrefix(n int) string {
+	cell := strings.Repeat("wrapping cell content with spaces so it hits the 320 cap. ", 8)
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "| ColA | ColB |\n| --- | --- |\n| row-%d-a %s | row-%d-b %s |\n| more-%d %s | extra-%d %s |\n\n",
+			i, cell, i, cell, i, cell, i, cell)
+	}
+	return b.String()
+}
+
+func paragraphPrefix(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "Finished paragraph %d sits above the stream and should not be rebuilt every token.\n\n", i)
+	}
+	return b.String()
+}
+
+func measureStreamFrom(t *testing.T, a *App, tt *ui.Tester, fp *frameProbe, builds *int, prefix string, toks []string) []streamSample {
+	t.Helper()
+	doc := parser.New(0)
+	var src strings.Builder
+	src.WriteString(prefix)
+	msg := &a.active().Messages[len(a.active().Messages)-1]
+	msg.Content = prefix
+	runOneFrame(tt)
+	out := make([]streamSample, 0, len(toks))
+	for i, tok := range toks {
+		src.WriteString(tok)
+		p0 := time.Now()
+		doc.Set(src.String())
+		parse := time.Since(p0)
+		msg.Content = src.String()
+		fp.laps = [4]time.Duration{}
+		before := *builds
+		start := time.Now()
+		runOneFrame(tt)
+		wall := time.Since(start)
+		if *builds-before != 1 {
+			t.Fatalf("token %d built %d frames", i+1, *builds-before)
+		}
+		out = append(out, streamSample{
+			wall: wall, build: fp.laps[0], layout: fp.laps[1], paint: fp.laps[2], present: fp.laps[3],
+			parse: parse, tokens: i + 1,
+		})
+	}
+	return out
+}
+
+func TestFinishedTablesStreamBuild(t *testing.T) {
+	const nBlock = 6
+	const tokens = 300
+	toks := longParagraph(tokens)
+	a, tt, fp, builds := openStream(t, 2880, 1800, 1, 0, true)
+	tableSamples := measureStreamFrom(t, a, tt, fp, builds, wrappingTablesPrefix(nBlock), toks)
+	b, tb, fp2, builds2 := openStream(t, 2880, 1800, 1, 0, true)
+	paraSamples := measureStreamFrom(t, b, tb, fp2, builds2, paragraphPrefix(nBlock), toks)
+	tableEarly := percentile(column(tableSamples[:40], func(s streamSample) time.Duration { return s.build }), 0.50)
+	tableLate := percentile(column(tableSamples[len(tableSamples)-80:], func(s streamSample) time.Duration { return s.build }), 0.50)
+	paraLate := percentile(column(paraSamples[len(paraSamples)-80:], func(s streamSample) time.Duration { return s.build }), 0.50)
+	tableP50 := percentile(column(tableSamples, func(s streamSample) time.Duration { return s.build }), 0.50)
+	paraP50 := percentile(column(paraSamples, func(s streamSample) time.Duration { return s.build }), 0.50)
+	t.Logf("finished wrapping tables + %d-token stream: n=%d p50=%s early p50=%s late p50=%s cache=%d", tokens, len(tableSamples), fmtDur(tableP50), fmtDur(tableEarly), fmtDur(tableLate), len(a.tableCache))
+	t.Logf("finished paragraphs + %d-token stream: n=%d p50=%s late p50=%s", tokens, len(paraSamples), fmtDur(paraP50), fmtDur(paraLate))
+	if len(a.tableCache) < nBlock {
+		t.Fatalf("expected at least %d cached tables, got %d", nBlock, len(a.tableCache))
+	}
+	if tableLate > tableEarly+2*time.Millisecond {
+		t.Fatalf("wrapping-table stream build grew from %s to %s", tableEarly, tableLate)
+	}
+	if tableLate > paraLate+2*time.Millisecond {
+		t.Fatalf("wrapping-table late build %s exceeds paragraph control %s by more than 2ms", tableLate, paraLate)
+	}
+}
+
 // driveStream appends one token and times the single frame that shows it.
 // Reveal is AtOnce so the tester's settle loop does not run twenty builds
 // at a frozen clock. That is one rebuild per frame, which is also what the
