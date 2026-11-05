@@ -63,7 +63,11 @@ type sideRow struct {
 
 func (a *App) view(c *ui.Context) {
 	a.inRender = true
-	defer func() { a.inRender = false }()
+	a.beginTableCache()
+	defer func() {
+		a.endTableCache()
+		a.inRender = false
+	}()
 	a.paintCtx = c
 	a.resetTabTargets()
 	a.resetSettingsTabs()

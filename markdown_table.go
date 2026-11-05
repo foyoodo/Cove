@@ -1,6 +1,8 @@
 package main
 
 import (
+	"math"
+	"path"
 	"strings"
 	"time"
 
@@ -8,33 +10,122 @@ import (
 	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
-// renderTable draws a markdown table with the token surfaces and horizontal
-// rules only. Columns grow to their content plus the design's 12pt cell
-// padding, and stop at the reading column. A three-column table uses the
-// design fixture's 220/190/190 widths as a floor: measured text plus 12pt
-// is narrower with the fonts available here. The stock markdown table
-// always paints a vertical border on each cell, so the table block is
-// replaced here.
+// Table cells wrap inside a 320pt column (padding included). Pieces,
+// measured widths, and painting stay separate so wrapping only changes
+// height and alignment.
+const (
+	tableCellPadX = 10
+	tableCellPadY = 5
+	tableLineH    = 20
+	tableMinRowH  = 30 // 5 + 20 + 5
+	tableMaxCol   = 320
+	tableBodySize = 13
+	tableCodeSize = 13
+)
+
+// tableCell is one measured cell. Width is unwrapped text; lines is how
+// many FixedLineHeight(20) rows the painted text occupies.
+type tableCell struct {
+	pieces []cellPiece
+	width  float32
+	lines  int
+	head   bool
+	first  bool
+}
+
+// tableLayout is the measured geometry of one chat table. Column widths
+// do not depend on the message width: the cap is a fixed 320pt. Colors
+// are applied at paint time so a theme crossfade does not remeasure.
+type tableLayout struct {
+	src     string
+	geom    string
+	rows    [][]tableCell
+	widths  []float32
+	heights []float32
+	total   float32
+	aligns  []parser.Align
+}
+
+func (a *App) beginTableCache() {
+	if a.tableCacheSeen == nil {
+		a.tableCacheSeen = make(map[string]struct{}, 8)
+		return
+	}
+	clear(a.tableCacheSeen)
+}
+
+func (a *App) endTableCache() {
+	for k := range a.tableCache {
+		if _, ok := a.tableCacheSeen[k]; !ok {
+			delete(a.tableCache, k)
+		}
+	}
+}
+
+func tableGeomKey() string {
+	return itoa(int(tableBodySize)) + "/" + itoa(int(tableCodeSize)) + "/" + itoa(int(tableLineH)) + "/" + itoa(int(tableMaxCol))
+}
+
+func tableCacheID(msg string, start int, geom string) string {
+	return msg + "/" + itoa(start) + "/" + geom
+}
+
+func tableRowHeight(lines int, header bool) float32 {
+	if lines < 1 {
+		lines = 1
+	}
+	if header {
+		return tableCellPadY*2 + float32(lines)*tableLineH
+	}
+	// SPEC §5.4.1: 1px rule + 4 + 20×n + 5. The rule sits in the row's
+	// top padding, so a single-line body row is 30, not 31.
+	return 1 + (tableCellPadY - 1) + float32(lines)*tableLineH + tableCellPadY
+}
+
+// renderTable draws a markdown table with the token surfaces and
+// horizontal rules only. Each column is min(natural + padding, 320).
+// Text wraps inside that cap; the table hugs the sum of the columns
+// and only scrolls when that sum is wider than the message. The stock
+// markdown table always paints a vertical border on each cell, so the
+// table block is replaced here.
 func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 	b := d.Block(i)
 	if b.Kind != parser.Table {
 		return false
 	}
-	p := a.look
-	type cell struct {
-		spans []ui.Span
-		check bool
-		width float32
-		head  bool
-		first bool
+	src := d.Source()
+	if b.Start < 0 || b.End > len(src) || b.Start > b.End {
+		return false
 	}
-	var rows [][]cell
+	tableSrc := src[b.Start:b.End]
+	geom := tableGeomKey()
+	id := tableCacheID(a.hScrollMsg, b.Start, geom)
+	if a.tableCacheSeen != nil {
+		a.tableCacheSeen[id] = struct{}{}
+	}
+	lay := a.tableCache[id]
+	if lay == nil || lay.src != tableSrc || lay.geom != geom {
+		lay = a.measureTable(c, d, i, tableSrc, geom)
+		if a.tableCache == nil {
+			a.tableCache = map[string]*tableLayout{}
+		}
+		a.tableCache[id] = lay
+	}
+	a.paintTableLayout(c, lay, i)
+	return true
+}
+
+func (a *App) measureTable(c *ui.Context, d *parser.Document, i int, src, geom string) *tableLayout {
+	a.tableMeasures++
+	b := d.Block(i)
+	p := a.look
+	var rows [][]tableCell
 	for r := i + 1; r < b.Next; r = d.Block(r).Next {
 		row := d.Block(r)
 		if row.Kind != parser.TableRow {
 			continue
 		}
-		var line []cell
+		var line []tableCell
 		k := 0
 		for ci := r + 1; ci < row.Next; ci = d.Block(ci).Next {
 			cb := d.Block(ci)
@@ -45,17 +136,9 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 			if row.Header {
 				weight = 600
 			}
-			spans := inlineSpans(d.Inlines(ci), 0, len(d.Inlines(ci)), weight, p, 13, 13)
-			plain := strings.TrimSpace(cellPlain(d, ci))
-			check := cellCheck(plain)
-			if check {
-				spans = stripCheck(spans)
-			}
-			w, _ := c.MeasureText(0, spans...)
-			if check {
-				w += 13 + 5
-			}
-			line = append(line, cell{spans: spans, check: check, width: w, head: row.Header, first: k == 0})
+			pieces := cellPieces(d.Inlines(ci), 0, len(d.Inlines(ci)), weight, p, tableBodySize, tableCodeSize)
+			w := measurePieces(c, pieces)
+			line = append(line, tableCell{pieces: pieces, width: w, head: row.Header, first: k == 0})
 			k++
 		}
 		if len(line) > 0 {
@@ -68,53 +151,59 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 			cols = len(row)
 		}
 	}
-	widths := make([]float32, cols)
+	natural := make([]float32, cols)
 	for _, row := range rows {
 		for k, cell := range row {
-			if cell.width > widths[k] {
-				widths[k] = cell.width
+			if cell.width > natural[k] {
+				natural[k] = cell.width
 			}
 		}
 	}
-	const pad = 12
-	maxCol := float32(readingWidth - 2)
-	// html/app.js freezes the fixture table at these column widths.
-	floors := []float32{220, 190, 190}
+	widths := make([]float32, cols)
 	for k := range widths {
-		widths[k] += pad * 2
-		if cols == len(floors) && widths[k] < floors[k] {
-			widths[k] = floors[k]
+		w := natural[k] + tableCellPadX*2
+		if w > tableMaxCol {
+			w = tableMaxCol
 		}
-		if widths[k] > maxCol {
-			widths[k] = maxCol
-		}
+		widths[k] = w
 	}
-
-	// Wider than the reading column, the table scrolls inside it. A
-	// shrink-wrapped grid would otherwise run under the card clip.
-	// The header scrolls with the rows. Text, icons and rules fade to
-	// transparent at the viewport edges; the row surfaces stay behind
-	// them, clipped by the table's own outline.
-	slot := a.hScrollSlot(a.hScrollKey("table", i))
+	heights := make([]float32, len(rows))
+	for ri, row := range rows {
+		header := len(row) > 0 && row[0].head
+		maxLines := 1
+		for k := range row {
+			inner := widths[k] - tableCellPadX*2
+			n := wrappedLineCount(row[k].pieces, inner, row[k].width)
+			row[k].lines = n
+			if n > maxLines {
+				maxLines = n
+			}
+		}
+		heights[ri] = tableRowHeight(maxLines, header)
+	}
 	var total float32
 	for _, w := range widths {
 		total += w
 	}
-	// Backgrounds stay put. Text, icons and rules are a layer in front
-	// whose alpha falls off at the viewport edges, so each row shows its
-	// own surface and the fade is not a plate.
-	ui.Box(c).FillWidth().MinWidth(0).Radius(radiusCode).Clip().Children(func() {
+	aligns := append([]parser.Align(nil), b.Align...)
+	return &tableLayout{src: src, geom: geom, rows: rows, widths: widths, heights: heights, total: total, aligns: aligns}
+}
+
+func (a *App) paintTableLayout(c *ui.Context, lay *tableLayout, i int) {
+	p := a.look
+	total := lay.total
+	slot := a.hScrollSlot(a.hScrollKey("table", i))
+	// Hug the columns when they fit; MaxWidthPercent keeps an overflowing
+	// table inside the message so ScrollHorizontal can take over.
+	ui.Box(c).Width(total).MaxWidthPercent(100).MinWidth(0).AlignSelf(ui.Start).Radius(radiusCode).Clip().Children(func() {
 		ui.ScrollHorizontal(c).FillWidth().MinWidth(0).TrackScroll(&slot.st).Label("table scroller").Children(func() {
 			stack := ui.Box(c).Width(total).Shrink(0)
 			a.fadeColors(stack)
 			stack.Children(func() {
 				ui.Column(c).Width(total).Shrink(0).Children(func() {
-					for ri, row := range rows {
-						if ri > 0 {
-							ui.Box(c).Height(1).Width(total)
-						}
-						bar := ui.Box(c).Height(30).Width(total)
-						if row[0].head {
+					for ri, row := range lay.rows {
+						bar := ui.Box(c).Height(lay.heights[ri]).Width(total)
+						if len(row) > 0 && row[0].head {
 							bar.Background(p.TableHeader)
 						}
 					}
@@ -124,118 +213,353 @@ func (a *App) renderTable(c *ui.Context, d *parser.Document, i int) bool {
 					front.Effect(fx)
 				}
 				front.Children(func() {
-					for ri, row := range rows {
-						if ri > 0 {
-							ui.Box(c).Height(1).Width(total).Background(p.TableRule)
-						}
-						line := ui.Row(c).Height(30).AlignItems(ui.Stretch).Shrink(0)
-						line.Children(func() {
-							for k, cell := range row {
-								w := float32(80)
-								if k < len(widths) {
-									w = widths[k]
-								}
-								color := p.TextSecondary
-								if cell.head || cell.first {
-									color = p.TextPrimary
-								}
-								box := ui.Row(c).Width(w).Height(30).Padding(0, pad).Gap(5).AlignItems(ui.Center).Shrink(0)
-								box.Children(func() {
-									if cell.check {
-										ui.Icon(c, iconCheck).Size(13, 13).TextColor(p.StatusSuccess).Shrink(0)
-									}
-									text := ui.RichText(c, cell.spans...).FontSize(13).LineHeight(16.0 / 13.0).TextColor(color).MaxLines(1)
-									if cell.head {
-										text.FontWeight(600)
-									}
-								})
+					for ri, row := range lay.rows {
+						header := len(row) > 0 && row[0].head
+						box := ui.Column(c).Width(total).Height(lay.heights[ri]).Shrink(0)
+						box.Children(func() {
+							if !header {
+								ui.Box(c).Height(1).Width(total).Background(p.TableRule)
 							}
+							line := ui.Row(c).Grow(1).AlignItems(ui.Stretch).MinHeight(0)
+							line.Children(func() {
+								for k, cell := range row {
+									padTop := float32(tableCellPadY)
+									if !header {
+										padTop = tableCellPadY - 1
+									}
+									color := p.TextSecondary
+									if cell.head || cell.first {
+										color = p.TextPrimary
+									}
+									cellBox := ui.Column(c).Width(lay.widths[k]).FillHeight().Padding(padTop, tableCellPadX, tableCellPadY, tableCellPadX).AlignItems(ui.Stretch).Justify(ui.Start).Shrink(0)
+									cellBox.Children(func() {
+										a.paintCellText(c, cell.pieces, color, cell.head, tableAlign(lay.aligns, k))
+									})
+								}
+							})
 						})
 					}
 				})
 			})
 		})
 	})
-	return true
 }
 
-// cellCheck reports cells the design marks with a success check: an exact
-// "Yes" or "Immediately", or the same words written with a leading check.
-func cellCheck(plain string) bool {
-	s := strings.TrimSpace(plain)
-	s = strings.TrimPrefix(s, "✓")
-	s = strings.TrimPrefix(s, "✔")
-	s = strings.TrimSpace(s)
-	return s == "Yes" || s == "Immediately"
+func tableAlign(aligns []parser.Align, k int) ui.Align {
+	if k >= len(aligns) {
+		return ui.Start
+	}
+	switch aligns[k] {
+	case parser.AlignCenter:
+		return ui.Center
+	case parser.AlignRight:
+		return ui.End
+	default:
+		return ui.Start
+	}
 }
 
-func stripCheck(spans []ui.Span) []ui.Span {
+func wrappedLineCount(pieces []cellPiece, wrapW, natural float32) int {
+	hard := 1
+	for _, pc := range pieces {
+		for _, sp := range pc.spans {
+			hard += strings.Count(sp.Text, "\n")
+		}
+	}
+	if hard < 1 {
+		hard = 1
+	}
+	if wrapW < 8 {
+		wrapW = 8
+	}
+	if natural <= wrapW {
+		return hard
+	}
+	spans := flattenCellPieces(pieces)
 	if len(spans) == 0 {
-		return spans
+		return 1
 	}
-	s := spans[0].Text
-	s = strings.TrimPrefix(s, "✓")
-	s = strings.TrimPrefix(s, "✔")
-	s = strings.TrimPrefix(s, " ")
-	spans[0].Text = s
-	return spans
+	layout := ui.ShapeRichText(spans, ui.Font{Size: tableBodySize}, wrapW)
+	n := shapedLineCount(layout)
+	if n < hard {
+		n = hard
+	}
+	return n
 }
 
-func cellPlain(d *parser.Document, i int) string {
-	b := d.Block(i)
-	src := d.Source()
-	text := ""
-	if b.Start >= 0 && b.End <= len(src) && b.End > b.Start {
-		text = src[b.Start:b.End]
-	} else {
-		text = d.Lines(i)
+func shapedLineCount(layout *ui.TextLayout) int {
+	n := 1
+	y := layout.Caret(0).Y
+	i := 0
+	for step := 0; step < 20000; step++ {
+		j := layout.NextBoundary(i)
+		if j <= i {
+			break
+		}
+		cy := layout.Caret(j).Y
+		if cy > y+0.5 {
+			n++
+			y = cy
+		}
+		i = j
 	}
-	text = strings.ReplaceAll(text, "\n", " ")
-	return strings.TrimSpace(text)
+	return n
 }
 
-// inlineSpans turns a block's inlines into rich-text spans: body text,
-// semibold, and inline code as a filled chip (code/inlineBg, no border).
-func inlineSpans(in []parser.Inline, from, to, weight int, p Theme, body, code float32) []ui.Span {
+// cellPiece is one run of a table cell, or of a streaming paragraph.
+// dest is set for a link, which paints as ui.Link so clicks and hover
+// match a paragraph.
+type cellPiece struct {
+	spans   []ui.Span
+	dest    string
+	title   string
+	pending bool
+	auto    bool
+}
+
+type inlineStyle struct {
+	weight         int
+	italic, strike bool
+	inLink         bool
+	dest, title    string
+	pending, auto  bool
+}
+
+func cellPieces(in []parser.Inline, from, to, weight int, p Theme, body, code float32) []cellPiece {
 	if from < 0 {
 		from = 0
 	}
 	if to > len(in) {
 		to = len(in)
 	}
-	var out []ui.Span
+	var out []cellPiece
+	walkCellInlines(in, from, to, inlineStyle{weight: weight}, p, body, code, &out)
+	return out
+}
+
+func walkCellInlines(in []parser.Inline, from, to int, st inlineStyle, p Theme, body, code float32, out *[]cellPiece) {
 	for k := from; k < to; k = in[k].Next {
 		n := in[k]
 		switch n.Kind {
 		case parser.Text:
-			out = append(out, ui.Span{Text: n.Text, Size: body, Weight: weight})
+			addCellSpan(out, st, p, ui.Span{Text: n.Text, Size: body, Weight: st.weight, Italic: st.italic, Strikethrough: st.strike})
 		case parser.SoftBreak:
-			out = append(out, ui.Span{Text: " ", Size: body, Weight: weight})
+			addCellSpan(out, st, p, ui.Span{Text: " ", Size: body, Weight: st.weight, Italic: st.italic, Strikethrough: st.strike})
 		case parser.LineBreak:
-			out = append(out, ui.Span{Text: "\n", Size: body, Weight: weight})
+			addCellSpan(out, st, p, ui.Span{Text: "\n", Size: body, Weight: st.weight, Italic: st.italic, Strikethrough: st.strike})
 		case parser.Code:
-			out = append(out, ui.Span{
+			sp := ui.Span{
 				Text: n.Text, Font: "ui-monospace", Size: code, Weight: 400,
-				Color: p.CodeInlineText, Background: p.CodeInlineBg, Radius: 4,
-			})
-		case parser.Strong:
-			out = append(out, inlineSpans(in, k+1, n.Next, 600, p, body, code)...)
-		case parser.Emphasis:
-			inner := inlineSpans(in, k+1, n.Next, weight, p, body, code)
-			for i := range inner {
-				inner[i].Italic = true
+				Background: p.CodeInlineBg, Radius: 4,
+				Italic: st.italic, Strikethrough: st.strike,
 			}
-			out = append(out, inner...)
+			if !st.inLink {
+				sp.Color = p.CodeInlineText
+			}
+			addCellSpan(out, st, p, sp)
+		case parser.Strong:
+			cs := st
+			cs.weight = 600
+			walkCellInlines(in, k+1, n.Next, cs, p, body, code, out)
+		case parser.Emphasis:
+			cs := st
+			cs.italic = true
+			walkCellInlines(in, k+1, n.Next, cs, p, body, code, out)
+		case parser.Strikethrough:
+			cs := st
+			cs.strike = true
+			walkCellInlines(in, k+1, n.Next, cs, p, body, code, out)
+		case parser.Link:
+			if st.inLink {
+				walkCellInlines(in, k+1, n.Next, st, p, body, code, out)
+				continue
+			}
+			cs := st
+			cs.inLink, cs.dest, cs.title = true, n.Dest, n.Title
+			cs.pending, cs.auto = n.Pending, n.Auto
+			walkCellInlines(in, k+1, n.Next, cs, p, body, code, out)
+		case parser.Image:
+			alt := strings.TrimSpace(parser.PlainText(in[k+1 : n.Next]))
+			if alt == "" {
+				alt = imageCellName(n.Dest)
+			}
+			if st.inLink || n.Dest == "" {
+				addCellSpan(out, st, p, ui.Span{Text: alt, Size: body, Weight: st.weight, Italic: st.italic, Strikethrough: st.strike})
+				continue
+			}
+			cs := st
+			cs.inLink, cs.dest, cs.title = true, n.Dest, n.Title
+			addCellSpan(out, cs, p, ui.Span{
+				Text: alt, Size: body, Weight: st.weight,
+				Color: p.TextLink, Italic: st.italic, Strikethrough: st.strike,
+			})
+		case parser.Math:
+			addCellSpan(out, st, p, ui.Span{
+				Text: n.Text, Font: "ui-monospace", Size: code, Weight: st.weight,
+				Color: p.TextSecondary, Italic: st.italic, Strikethrough: st.strike,
+			})
 		default:
-			if n.Text != "" {
-				out = append(out, ui.Span{Text: n.Text, Size: body, Weight: weight})
+			if n.Next > k+1 {
+				walkCellInlines(in, k+1, n.Next, st, p, body, code, out)
+			} else if n.Text != "" {
+				addCellSpan(out, st, p, ui.Span{Text: n.Text, Size: body, Weight: st.weight, Italic: st.italic, Strikethrough: st.strike})
 			}
 		}
 		if in[k].Next <= k {
 			break
 		}
 	}
+}
+
+func addCellSpan(out *[]cellPiece, st inlineStyle, p Theme, sp ui.Span) {
+	if sp.Text == "" {
+		return
+	}
+	if st.inLink && sp.Color.A == 0 {
+		sp.Color = p.TextLink
+	}
+	n := len(*out)
+	if n > 0 {
+		last := &(*out)[n-1]
+		if last.dest == st.dest && last.title == st.title && last.pending == st.pending && last.auto == st.auto {
+			last.spans = append(last.spans, sp)
+			return
+		}
+	}
+	*out = append(*out, cellPiece{
+		spans: []ui.Span{sp}, dest: st.dest, title: st.title,
+		pending: st.pending, auto: st.auto,
+	})
+}
+
+// themePieces copies cell runs and stamps the current palette. Geometry
+// is cached without colors, so a theme or accent crossfade only repaints.
+func themePieces(pieces []cellPiece, p Theme) []cellPiece {
+	if len(pieces) == 0 {
+		return pieces
+	}
+	out := make([]cellPiece, len(pieces))
+	for i, pc := range pieces {
+		out[i] = pc
+		if len(pc.spans) == 0 {
+			continue
+		}
+		spans := make([]ui.Span, len(pc.spans))
+		copy(spans, pc.spans)
+		for j := range spans {
+			sp := &spans[j]
+			code := sp.Font == "ui-monospace" && sp.Radius == 4
+			if code {
+				sp.Background = p.CodeInlineBg
+			}
+			switch {
+			case pc.dest != "" && !pc.pending:
+				sp.Color = p.TextLink
+			case code:
+				sp.Color = p.CodeInlineText
+			case sp.Font == "ui-monospace":
+				sp.Color = p.TextSecondary
+			}
+		}
+		out[i].spans = spans
+	}
 	return out
+}
+
+func flattenCellPieces(pieces []cellPiece) []ui.Span {
+	var n int
+	for _, pc := range pieces {
+		n += len(pc.spans)
+	}
+	out := make([]ui.Span, 0, n)
+	for _, pc := range pieces {
+		out = append(out, pc.spans...)
+	}
+	return out
+}
+
+func measurePieces(c *ui.Context, pieces []cellPiece) float32 {
+	spans := flattenCellPieces(pieces)
+	if len(spans) == 0 {
+		return 0
+	}
+	w, _ := c.MeasureText(0, spans...)
+	return float32(math.Ceil(float64(w)))
+}
+
+func imageCellName(dest string) string {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return "image"
+	}
+	if i := strings.IndexAny(dest, "?#"); i >= 0 {
+		dest = dest[:i]
+	}
+	dest = strings.TrimRight(dest, "/")
+	base := path.Base(dest)
+	if base == "" || base == "." || base == "/" {
+		return "image"
+	}
+	return base
+}
+
+func (a *App) paintCellText(c *ui.Context, pieces []cellPiece, color ui.Color, head bool, align ui.Align) {
+	pieces = themePieces(pieces, a.look)
+	rest := pieces
+	var el ui.Element
+	switch {
+	case len(pieces) == 0:
+		el = ui.Text(c, "")
+	case pieces[0].dest == "":
+		el = ui.RichText(c, pieces[0].spans...)
+		rest = pieces[1:]
+	default:
+		el = ui.RichText(c)
+	}
+	el.FontSize(tableBodySize).FixedLineHeight(tableLineH).TextColor(color)
+	if head {
+		el.FontWeight(600)
+	}
+	el.FillWidth().MinWidth(0).TextAlign(align)
+	if len(rest) == 0 {
+		return
+	}
+	el.Children(func() {
+		for i := range rest {
+			a.paintCellPiece(c, rest[i])
+		}
+	})
+}
+
+func (a *App) paintCellPiece(c *ui.Context, pc cellPiece) {
+	if pc.dest == "" || pc.pending {
+		ui.RichText(c, pc.spans...)
+		return
+	}
+	p := a.look
+	l := ui.Link(c, "", "")
+	if l.Clicked() {
+		if a.md.OnLink != nil {
+			a.md.OnLink(pc.dest)
+		} else {
+			c.OpenURL(pc.dest)
+		}
+	}
+	l.TextColor(p.TextLink)
+	switch {
+	case pc.title != "":
+		l.Tooltip(pc.title)
+	case !pc.auto && pc.dest != "" && !strings.HasPrefix(pc.dest, "#"):
+		l.Tooltip(pc.dest)
+	}
+	l.Children(func() { ui.RichText(c, pc.spans...) })
+}
+
+// inlineSpans turns a block's inlines into rich-text spans: body text,
+// semibold, and inline code as a filled chip (code/inlineBg, no border).
+// Links, strikethrough, and images keep the same text as a paragraph.
+func inlineSpans(in []parser.Inline, from, to, weight int, p Theme, body, code float32) []ui.Span {
+	return flattenCellPieces(cellPieces(in, from, to, weight, p, body, code))
 }
 
 // renderStreamCaret replaces the paragraph still being written so a 2×17
@@ -478,7 +802,7 @@ func sameStreamSpans(a, b []ui.Span) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Text != b[i].Text || a[i].Font != b[i].Font || a[i].Size != b[i].Size || a[i].Weight != b[i].Weight || a[i].Italic != b[i].Italic || a[i].Color != b[i].Color || a[i].Background != b[i].Background {
+		if a[i].Text != b[i].Text || a[i].Font != b[i].Font || a[i].Size != b[i].Size || a[i].Weight != b[i].Weight || a[i].Italic != b[i].Italic || a[i].Strikethrough != b[i].Strikethrough || a[i].Color != b[i].Color || a[i].Background != b[i].Background {
 			return false
 		}
 	}

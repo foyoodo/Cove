@@ -110,11 +110,11 @@ func TestTableFadeMatchesSurface(t *testing.T) {
 		if dark {
 			mode = "dark"
 		}
-		a := smallLongApp(t)
+		a := tableShotApp(t, tableWideMarkdown())
 		tt := openHScroll(t, a, 720, 520, dark)
-		assertTableEdge(t, tt, mode+" right", true)
+		assertTableEdge(t, tt, mode+" right", "Column 1 heading", true)
 		placeHScroll(t, a, tt, "middle")
-		assertTableEdge(t, tt, mode+" left", false)
+		assertTableEdge(t, tt, mode+" left", "Column 1 heading", false)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestHScrollR3Shots(t *testing.T) {
 		if dark {
 			mode = "dark"
 		}
-		a := smallLongApp(t)
+		a := tableShotApp(t, tableWideMarkdown())
 		tt := openHScroll(t, a, 720, 520, dark)
 		table := mustFind(t, tt, "table scroller")
 		writePNG(t, filepath.Join(dir, "table-right-"+mode+".png"), scaleNN(cropRect(tt.Image(), tableEdgeCrop(table, true), 0), 8))
@@ -151,10 +151,10 @@ func tableEdgeCrop(table ui.Rect, right bool) ui.Rect {
 	return ui.Rect{X: x, Y: table.Y - 6, W: w, H: table.H + 12}
 }
 
-func assertTableEdge(t *testing.T, tt *ui.Tester, mode string, right bool) {
+func assertTableEdge(t *testing.T, tt *ui.Tester, mode, header string, right bool) {
 	t.Helper()
 	table := mustFind(t, tt, "table scroller")
-	head := mustFind(t, tt, "Approach")
+	head := mustFind(t, tt, header)
 	if head.Y < table.Y-1 || head.Y > table.Y+28 {
 		t.Fatalf("%s header is not the top row: head %v table %v", mode, head, table)
 	}
@@ -179,7 +179,8 @@ func assertTableEdge(t *testing.T, tt *ui.Tester, mode string, right bool) {
 	// The page behind the table is a gradient, so a row's own background
 	// is the empty pixel of that row just beside the band, not a pixel
 	// from the middle of the viewport.
-	// Header, then each body row. Rules are 1px between 30px rows.
+	// Header, then each body row. The 1px rule sits inside the body's
+	// top padding, so each row is 30pt.
 	y := table.Y
 	rows := 0
 	var headerOwn, headerEdge, bodyOwn, bodyEdge color.RGBA
@@ -207,7 +208,7 @@ func assertTableEdge(t *testing.T, tt *ui.Tester, mode string, right bool) {
 			bodyOwn, bodyEdge = own, edge
 		}
 		rows++
-		y += 31
+		y += 30
 	}
 	if rows < 2 {
 		t.Fatalf("%s expected header and a body row, table %v", mode, table)
