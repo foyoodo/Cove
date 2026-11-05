@@ -196,6 +196,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out
+        uses: actions/checkout@v7
       - name: Download signed builds
         uses: actions/download-artifact@v7
         with:
