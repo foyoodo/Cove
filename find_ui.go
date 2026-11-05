@@ -660,6 +660,9 @@ func (a *App) findBlock(c *ui.Context, d *parser.Document, i int) bool {
 		return false
 	}
 	blk := d.Block(i)
+	if a.paintBoxTableFind(c, d, i) {
+		return true
+	}
 	switch blk.Kind {
 	case parser.Paragraph, parser.Heading:
 		return a.paintLeaf(c, d, i, blk)

@@ -376,6 +376,9 @@ type App struct {
 	tableCache     map[string]*tableLayout
 	tableCacheSeen map[string]struct{}
 	tableMeasures  int
+	// lastBox is the box-drawing table painted last in this frame.
+	// Tests read it; the app does not.
+	lastBox boxTableInfo
 
 	// Title generation. Jobs run off the frame. Fades and failures are
 	// drawn on the next frame. sideKeep holds sidebar rows that matched

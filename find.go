@@ -319,6 +319,12 @@ func renderDoc(m findSrc) findDoc {
 		blk := doc.Block(i)
 		switch blk.Kind {
 		case parser.Paragraph, parser.Heading, parser.TableCell:
+			if blk.Kind == parser.Paragraph {
+				if text, ok := boxTableSource(doc, i); ok {
+					add("text", text)
+					continue
+				}
+			}
 			add("text", joinStyled(blockParts(doc, i)))
 		case parser.CodeBlock:
 			add("code", strings.TrimRight(doc.Lines(i), "\n"))
