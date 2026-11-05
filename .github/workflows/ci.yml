@@ -58,8 +58,46 @@ jobs:
           fc-match sans-serif
 
       - name: Test
+        # Three verbose runs record TestThemeSwitchMainThreadBound's
+        # absolute generation time. -v keeps PERF-RETRY lines on a pass.
         # The main package takes several minutes; the default 10m limit is close.
-        run: go test -timeout 20m ./...
+        run: |
+          set -euo pipefail
+          for run in 1 2 3; do
+            echo "SUITE-RUN ${run}"
+            log="${RUNNER_TEMP}/go-test-${run}.txt"
+            set +e
+            go test -timeout 20m -count=1 -v ./... | tee "$log"
+            code=${PIPESTATUS[0]}
+            set -e
+            python3 - "$log" <<'PY'
+            import sys
+            passed = failed = 0
+            skips = []
+            retries = []
+            for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+                if line.startswith("--- PASS:"):
+                    passed += 1
+                elif line.startswith("--- FAIL:"):
+                    failed += 1
+                elif line.startswith("--- SKIP:"):
+                    rest = line[len("--- SKIP:"):].strip()
+                    skips.append(rest.split(" ", 1)[0])
+                elif "PERF-RETRY:" in line:
+                    retries.append(line[line.find("PERF-RETRY:"):].rstrip())
+            total = passed + failed + len(skips)
+            print(f"TEST-SUMMARY: pass={passed} fail={failed} skip={len(skips)} total={total}")
+            for name in skips:
+                print(f"TEST-SKIP: {name}")
+            if not retries:
+                print("PERF-RETRY: none")
+            for line in retries:
+                print(line)
+            PY
+            if [[ "$code" -ne 0 ]]; then
+              exit "$code"
+            fi
+          done
 
       # MyGo needs no cgo, so both Mac apps cross-compile on Linux.
       # darwin/universal compiles arm64 and amd64, then writes one fat
