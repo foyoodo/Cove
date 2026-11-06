@@ -123,6 +123,18 @@ func boxSurroundMD() string {
 	}, "\n")
 }
 
+func boxAdjacentMD() string {
+	return strings.Join([]string{
+		"Lead **bold** sits on the previous line.",
+		boxEnglishMD(),
+		"Trail _italic_ sits on the next line.",
+	}, "\n")
+}
+
+func boxFencedMD() string {
+	return "```\nnote: keep the fence\n" + boxEnglishMD() + "\n```\n"
+}
+
 func TestBoxTableDetection(t *testing.T) {
 	if isBoxTable([]string{"┌──┐", "│  │"}) {
 		t.Fatal("two lines must not qualify")
@@ -141,6 +153,16 @@ func TestBoxTableDetection(t *testing.T) {
 	}
 	if !isBoxTable([]string{"hello", "┌──┐", "│  │", "└──┘", "tail"}) {
 		t.Fatal("run of three inside surrounding lines should qualify")
+	}
+	segs := splitBoxSegs([]string{"hello", "┌──┐", "│  │", "└──┘", "tail"})
+	if len(segs) != 3 || segs[0].Box || !segs[1].Box || segs[2].Box {
+		t.Fatalf("split segs %+v", segs)
+	}
+	if strings.Join(segs[0].Lines, "\n") != "hello" || strings.Join(segs[2].Lines, "\n") != "tail" {
+		t.Fatalf("prose not isolated: %+v", segs)
+	}
+	if len(segs[1].Lines) != 3 {
+		t.Fatalf("box run %q", segs[1].Lines)
 	}
 	if !lineQualifies("│ ends with x") || !lineQualifies("x ends with │") {
 		t.Fatal("start or end must qualify")
@@ -171,20 +193,13 @@ func TestBoxTableParserKinds(t *testing.T) {
 
 	doc = parser.New(parser.Default)
 	doc.Set("```\n" + boxEnglishMD() + "\n```\n")
-	found = false
 	for i := 1; i < doc.Len(); i++ {
-		if src, ok := boxTableSource(doc, i); ok {
-			found = true
-			if doc.Block(i).Kind != parser.CodeBlock {
-				t.Fatalf("fenced box table kind %v", doc.Block(i).Kind)
-			}
-			if !strings.Contains(src, "┌") {
-				t.Fatalf("fenced source %q", src)
-			}
+		if _, ok := boxTableSource(doc, i); ok {
+			t.Fatal("fenced code must not become a table block")
 		}
-	}
-	if !found {
-		t.Fatal("fenced box table not detected")
+		if doc.Block(i).Kind == parser.CodeBlock && !isBoxTable(codeBlockLines(doc.Lines(i))) {
+			t.Fatal("fenced body should still qualify for the cell grid")
+		}
 	}
 
 	doc = parser.New(parser.Default)
@@ -270,6 +285,31 @@ func TestDashLayoutFourAtOneCh(t *testing.T) {
 	}
 }
 
+func TestFindIndexesAdjacentProse(t *testing.T) {
+	doc := renderDoc(findSrc{ID: "a", Role: roleAssistant, Done: true, Content: boxAdjacentMD()})
+	if !strings.Contains(doc.Text, "Lead") || !strings.Contains(doc.Text, "Trail") {
+		t.Fatalf("adjacent prose dropped from find: %q", doc.Text)
+	}
+	if !strings.Contains(doc.Text, "\n") || !strings.Contains(doc.Text, "┌") {
+		t.Fatalf("box run lost newlines in find: %q", doc.Text)
+	}
+	var box, prose int
+	for _, r := range doc.Runs {
+		if strings.Contains(r.Text, "┌") {
+			box++
+			if strings.Contains(r.Text, "Lead") || strings.Contains(r.Text, "Trail") {
+				t.Fatalf("prose mixed into box find run: %q", r.Text)
+			}
+		}
+		if strings.Contains(r.Text, "Lead") || strings.Contains(r.Text, "Trail") {
+			prose++
+		}
+	}
+	if box != 1 || prose < 1 {
+		t.Fatalf("runs box=%d prose=%d %+v", box, prose, doc.Runs)
+	}
+}
+
 func TestFindIndexesBoxTableNewlines(t *testing.T) {
 	src := boxEnglishMD()
 	doc := renderDoc(findSrc{ID: "a", Role: roleAssistant, Done: true, Content: src})
@@ -335,11 +375,19 @@ func TestBoxTableRendersWithoutCodeHeader(t *testing.T) {
 	}
 }
 
-func TestBoxTableFencedHasNoHeader(t *testing.T) {
-	_, tt := openBox(t, "```\n"+boxEnglishMD()+"\n```\n")
-	mustFind(t, tt, "box table")
-	if tt.HasText("code header") {
-		t.Fatal("fenced box table kept the code header")
+func TestBoxTableFencedKeepsHeader(t *testing.T) {
+	a, tt := openBox(t, boxFencedMD())
+	mustFind(t, tt, "code block")
+	mustFind(t, tt, "code header")
+	mustFind(t, tt, "box table grid")
+	if tt.HasText("box table") && !tt.HasText("code header") {
+		t.Fatal("fenced code became a table block")
+	}
+	if a.lastBox.Rows < 3 {
+		t.Fatalf("fenced grid %+v", a.lastBox)
+	}
+	if !tt.HasText("Design") || !tt.HasText("note: keep the fence") {
+		t.Fatalf("fenced body missing text: %q", tt.Texts())
 	}
 }
 
@@ -368,6 +416,38 @@ func TestBoxTableSurroundingText(t *testing.T) {
 	}
 }
 
+func TestBoxTableAdjacentProseStaysMarkdown(t *testing.T) {
+	a, tt := openBox(t, boxAdjacentMD())
+	mustFind(t, tt, "box table")
+	mustFind(t, tt, "Lead bold sits on the previous line.")
+	mustFind(t, tt, "Trail italic sits on the next line.")
+	if tt.HasText("**bold**") {
+		t.Fatalf("lead lost Markdown: %q", tt.Texts())
+	}
+	if tt.HasText("_italic_") {
+		t.Fatalf("trail lost Markdown: %q", tt.Texts())
+	}
+	if strings.Contains(a.lastBox.Src, "Lead") || strings.Contains(a.lastBox.Src, "Trail") {
+		t.Fatalf("prose absorbed into the box block: %q", a.lastBox.Src)
+	}
+	if a.lastBox.Rows != strings.Count(boxEnglishMD(), "\n")+1 {
+		t.Fatalf("box rows %+v", a.lastBox)
+	}
+	doc := parser.New(parser.Default)
+	doc.Set(boxAdjacentMD())
+	var para int
+	for i := 1; i < doc.Len(); i++ {
+		if doc.Block(i).Kind == parser.Paragraph {
+			para = i
+			break
+		}
+	}
+	segs := paragraphBoxSegs(doc, para)
+	if len(segs) != 3 || segs[0].Box || !segs[1].Box || segs[2].Box {
+		t.Fatalf("adjacent split %+v", segs)
+	}
+}
+
 func TestBoxTableCJKTwoCells(t *testing.T) {
 	a, tt := openBox(t, boxCJKMD())
 	mustFind(t, tt, "box table grid")
@@ -389,23 +469,16 @@ func TestBoxTableCJKTwoCells(t *testing.T) {
 }
 
 func TestBoxTableCopyRoundtrip(t *testing.T) {
-	body := boxEnglishMD()
-	_, tt := openBox(t, body)
-	grid := mustFind(t, tt, "box table grid")
-	tt.Press(grid.X+2, grid.Y+2)
-	tt.Move(grid.X+grid.W-2, grid.Y+grid.H-2)
-	tt.Release(grid.X+grid.W-2, grid.Y+grid.H-2)
-	tt.Key(ui.Cmd, ui.KeyC)
-	got := tt.Clipboard()
-	if !strings.Contains(got, "┌") || !strings.Contains(got, "Design") {
-		t.Fatalf("copy lost box drawing or cells: %q", got)
-	}
-	if strings.Contains(got, "│") && !strings.Contains(body, strings.TrimSpace(got)) && !strings.Contains(got, "Stage") {
-		t.Fatalf("copy %q", got)
-	}
-	for _, r := range []rune{'┌', '┬', '┐', '│', '├', '┼', '┤', '└', '┴', '┘'} {
-		if !strings.ContainsRune(got, r) && strings.ContainsRune(body, r) {
-			t.Fatalf("copy dropped %q: %q", string(r), got)
+	for _, body := range []string{boxEnglishMD(), boxCJKMD()} {
+		_, tt := openBox(t, body)
+		grid := mustFind(t, tt, "box table grid")
+		tt.Press(grid.X+0.5, grid.Y+0.5)
+		tt.Move(grid.X+grid.W-0.5, grid.Y+grid.H-0.5)
+		tt.Release(grid.X+grid.W-0.5, grid.Y+grid.H-0.5)
+		tt.Key(ui.Cmd, ui.KeyC)
+		got := tt.Clipboard()
+		if got != body {
+			t.Fatalf("copy %q want %q", got, body)
 		}
 	}
 }
@@ -431,7 +504,8 @@ func TestBoxTableSelectionHitTesting(t *testing.T) {
 }
 
 func TestBoxTableFindOverlay(t *testing.T) {
-	a := boxShotApp(t, boxEnglishMD())
+	body := boxEnglishMD()
+	a := boxShotApp(t, body)
 	tt := ui.NewTester(a.view, shotW, shotH)
 	tt.Frame()
 	tt.Key(ui.Cmd, ui.KeyF)
@@ -440,11 +514,30 @@ func TestBoxTableFindOverlay(t *testing.T) {
 	waitFind(t, a)
 	tt.Frame()
 	if len(a.finder.hits) < 1 {
-		t.Fatalf("find hits %d text %q", len(a.finder.hits), renderDoc(findSrc{ID: "a", Role: roleAssistant, Done: true, Content: boxEnglishMD()}).Text)
+		t.Fatalf("find hits %d text %q", len(a.finder.hits), renderDoc(findSrc{ID: "a", Role: roleAssistant, Done: true, Content: body}).Text)
+	}
+	a.jumpFind(0, time.Time{})
+	for i := 0; i < 8 && a.finder.markW < 4; i++ {
+		tt.Frame()
 	}
 	mustFind(t, tt, "box table")
-	if a.lastBox.Rows != strings.Count(boxEnglishMD(), "\n")+1 {
+	if a.lastBox.Rows != strings.Count(body, "\n")+1 {
 		t.Fatalf("find relayouted the grid: %+v", a.lastBox)
+	}
+	if a.finder.markW < 4 || a.finder.markH < 8 {
+		t.Fatalf("highlight rect missing: fresh=%v x=%.1f y=%.1f w=%.1f h=%.1f hits=%d cur=%d", a.finder.markFresh, a.finder.markX, a.finder.markY, a.finder.markW, a.finder.markH, len(a.finder.hits), a.finder.cur)
+	}
+	grid := mustFind(t, tt, "box table grid")
+	cw := a.lastBox.CellW
+	rowTop := grid.Y + boxLineH*3
+	rowBot := rowTop + boxLineH
+	cellL := grid.X + cw*2
+	cellR := grid.X + cw*8
+	if a.finder.markY+a.finder.markH < rowTop+2 || a.finder.markY > rowBot-2 {
+		t.Fatalf("highlight y=%.1f h=%.1f not on Design row [%.1f,%.1f]", a.finder.markY, a.finder.markH, rowTop, rowBot)
+	}
+	if a.finder.markX+a.finder.markW < cellL || a.finder.markX > cellR {
+		t.Fatalf("highlight x=%.1f w=%.1f not in Design cells [%.1f,%.1f]", a.finder.markX, a.finder.markW, cellL, cellR)
 	}
 }
 

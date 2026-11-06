@@ -34,6 +34,8 @@ func TestBoxTableDesignShots(t *testing.T) {
 		{"boxtable-wide", boxWideMD(), false, 720, 520},
 		{"boxtable-glyphs", boxAllGlyphsMD(), false, shotW, shotH},
 		{"boxtable-surround", boxSurroundMD(), false, shotW, shotH},
+		{"boxtable-adjacent", boxAdjacentMD(), false, shotW, shotH},
+		{"boxtable-fenced", boxFencedMD(), false, shotW, shotH},
 	}
 	for _, fx := range fixtures {
 		for _, dark := range []bool{false, true} {
@@ -53,9 +55,19 @@ func TestBoxTableDesignShots(t *testing.T) {
 			if fx.wide {
 				placeHScroll(t, a, tt, "middle")
 			}
-			mustFind(t, tt, "box table")
+			if fx.name == "boxtable-fenced" {
+				mustFind(t, tt, "code header")
+				mustFind(t, tt, "box table grid")
+			} else {
+				mustFind(t, tt, "box table")
+			}
 			writeBoxShot(t, dir, fx.name+"-"+mode, tt.Image())
-			writeBoxShot(t, dir, fx.name+"-"+mode+"-crop", cropGrid(t, tt, 8))
+			cropLabel := "box table"
+			if fx.name == "boxtable-fenced" {
+				cropLabel = "code block"
+			}
+			grid := mustFind(t, tt, cropLabel)
+			writeBoxShot(t, dir, fx.name+"-"+mode+"-crop", cropRect(tt.Image(), grid, 8))
 		}
 	}
 
@@ -139,6 +151,23 @@ func TestBoxTableDesignShots(t *testing.T) {
 		cw := a.lastBox.CellW
 		join := ui.Rect{X: grid.X + cw*9 + cw/2 - 8, Y: grid.Y + boxLineH/2 - 8, W: 16, H: 16}
 		writeBoxShot(t, zoom, "boxtable-join-"+mode+"-8x", scaleNN(cropRect(tt.Image(), join, 0), 8))
+		glyph := ui.Rect{X: grid.X, Y: grid.Y, W: cw * 12, H: boxLineH * 4}
+		writeBoxShot(t, zoom, "boxtable-glyph-close-"+mode+"-8x", scaleNN(cropRect(tt.Image(), glyph, 2), 8))
+	}
+
+	for _, dark := range []bool{false, true} {
+		mode := "light"
+		if dark {
+			mode = "dark"
+		}
+		a := boxShotApp(t, boxAllGlyphsMD())
+		tt := ui.NewTester(a.view, shotW, shotH)
+		if dark {
+			tt.SetDark(true)
+		}
+		tt.Frame()
+		grid := mustFind(t, tt, "box table grid")
+		writeBoxShot(t, zoom, "boxtable-glyphs-close-"+mode+"-4x", scaleNN(cropRect(tt.Image(), grid, 4), 4))
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "geometry-notes.txt"), []byte(boxGeometryNotes()), 0o644); err != nil {
@@ -169,5 +198,11 @@ func boxGeometryNotes() string {
 		"U+2580–259F are painted with the monospace glyph, never self-drawn.\n" +
 		"Headless tester default scale is 1. 2x CJK shots use Tester.SetScale(2).\n" +
 		"Software rasterizer; round StrokePath caps on arcs. Real-Mac Core Text\n" +
-		"advances and subpixel AA will differ slightly.\n"
+		"advances and subpixel AA will differ slightly.\n" +
+		"Fenced ``` code blocks always keep the language header and Copy button.\n" +
+		"They are never converted to a table block. Qualifying box-drawing lines\n" +
+		"inside the fence use this same cell grid so CJK and joins still line up.\n" +
+		"An unfenced table block contains only the qualifying ≥3-line run;\n" +
+		"adjacent prose in the same paragraph stays ordinary Markdown.\n" +
+		"Quarter-ellipse arcs and the 1x 4-dash 1px gap are Designer-accepted.\n"
 }

@@ -734,6 +734,35 @@ func (a *App) paintCode(c *ui.Context, d *parser.Document, i int, blk *parser.Bl
 	if lang == "" {
 		lang = "text"
 	}
+	lines := codeBlockLines(code)
+	if isBoxTable(lines) {
+		slot := a.hScrollSlot(a.hScrollKey("code", i))
+		edge := scrollEdge(p.CodeBg, a.cardFlat())
+		ui.Column(c).FillWidth().MinWidth(0).Radius(radiusCode).Background(p.CodeBg).Border(1, p.CodeBorder).Clip().AlignSelf(ui.Stretch).Label("code block").Children(func() {
+			ui.Row(c).Height(28).Padding(0, 4, 0, 12).Background(p.CodeHeader).AlignItems(ui.Center).Label("code header").Children(func() {
+				ui.Text(c, lang).FontSize(11).FontWeight(500).TextColor(p.TextSecondary).Unselectable()
+				ui.Spacer(c)
+				btn := ui.ButtonBase(c).Padding(2, 6).Radius(5).Gap(4).Label("Copy").Cursor(ui.CursorPointer)
+				a.quietControl(btn, radiusRow)
+				btn.Children(func() {
+					ui.Icon(c, iconCopy).Size(12, 12).TextColor(p.TextSecondary)
+					ui.Text(c, "Copy").FontSize(11).TextColor(p.TextSecondary)
+				})
+				if btn.Clicked() {
+					c.WriteClipboard(code)
+				}
+			})
+			ui.Box(c).AlignSelf(ui.Stretch).Children(func() {
+				ui.ScrollHorizontal(c).AlignSelf(ui.Stretch).TrackScroll(&slot.st).Children(func() {
+					ui.Box(c).Padding(boxPadT, boxPadX, boxPadB, boxPadX).Children(func() {
+						a.paintCodeBoxBody(c, lines, &run)
+					})
+				})
+				hScrollFades(c, slot, "code", edge)
+			})
+		})
+		return true
+	}
 	parts := a.codeParts(lang, code)
 	if joinStyled(parts) != code {
 		parts = []styled{{text: code, st: inlStyle{code: true, color: p.CodeText}}}

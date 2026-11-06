@@ -320,8 +320,14 @@ func renderDoc(m findSrc) findDoc {
 		switch blk.Kind {
 		case parser.Paragraph, parser.Heading, parser.TableCell:
 			if blk.Kind == parser.Paragraph {
-				if text, ok := boxTableSource(doc, i); ok {
-					add("text", text)
+				if segs := paragraphBoxSegs(doc, i); len(segs) > 0 {
+					for _, seg := range segs {
+						if seg.Box {
+							add("text", strings.Join(seg.Lines, "\n"))
+							continue
+						}
+						add("text", fragmentFindText(seg.Lines))
+					}
 					continue
 				}
 			}
