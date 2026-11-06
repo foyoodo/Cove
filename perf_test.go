@@ -181,7 +181,12 @@ func TestThemeSwitchMainThreadBound(t *testing.T) {
 	// because that wall time is the CI machine. One generation over the
 	// ratio is taken again; the second still has to pass.
 	const w, h = 2880, 1800
+	calib := cpuCalibration()
 	reference := referenceGeneration(w, h)
+	if themeSwitchCalibFail(reference, calib) {
+		t.Fatalf("reference generation %s is %.2f× the CPU calibration %s (limit %.2f×); renderGradient itself regressed",
+			reference, float64(reference)/float64(calib), calib, gradCalibFactor)
+	}
 	limit := generationReadyLimit(reference)
 	warm := themeLook(themes.ThemeWarm, false)
 	tide := themeLook(themes.ThemeTide, false)
@@ -227,7 +232,8 @@ func TestThemeSwitchMainThreadBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("theme-bitmap: attempts=%d durations=[%s] reference=%s limit=%s", len(samples), joinDurations(samples), reference, limit)
+	t.Logf("theme-bitmap: attempts=%d durations=[%s] reference=%s limit=%s calibration=%s calibRatio=%.2f",
+		len(samples), joinDurations(samples), reference, limit, calib, float64(reference)/float64(calib))
 	key := gradKeyOf(w, h, prepareWindowGrad(tide))
 	cacheMu.Lock()
 	e := entries[key]
@@ -1023,10 +1029,39 @@ func rapidCancel(t *testing.T) (published, aborted int64) {
 // genReadyFactor is how many times longer the async bitmap may take
 // than a synchronous generation measured in this process. CI runs of
 // the old 100ms gate landed between 94ms and 113ms, about 1.2× from
-// fastest to slowest, so a fixed millisecond cap was the machine.
-// 1.5× that same-process reference covers the spread. Twice the
-// reference still fails.
-const genReadyFactor = 1.5
+// fastest to slowest. 1.5× covers that spread. It does not see a
+// uniform slowdown of renderGradient, because the reference uses the
+// same function.
+//
+// gradCalibFactor is the independent guard. cpuCalibration is a fixed
+// arithmetic loop, not renderGradient. On a quiet 4-core host one
+// 2880×1800 generation is about 3.8× that loop. 6.5× leaves room for
+// the 1.2× CI spread and still fails twice the quiet ratio (about 7.6×).
+const (
+	genReadyFactor  = 1.5
+	gradCalibFactor = 6.5
+)
+
+// cpuCalibration times a fixed CPU-bound loop. It does not call
+// renderGradient, so a slower gradient does not move this clock.
+func cpuCalibration() time.Duration {
+	samples := make([]time.Duration, 3)
+	for i := range samples {
+		const n = 8_000_000
+		start := time.Now()
+		var x uint64 = 1
+		for k := uint64(0); k < n; k++ {
+			x = x*1664525 + 1013904223
+			x ^= x >> 11
+		}
+		if x == 0 {
+			samples[i] = time.Since(start)
+			continue
+		}
+		samples[i] = time.Since(start)
+	}
+	return medianDuration(samples)
+}
 
 func referenceGeneration(w, h int) time.Duration {
 	look := themeLook(themes.ThemeWarm, false)
@@ -1055,6 +1090,15 @@ func themeSwitchMainFail(prime, switchD time.Duration) bool {
 	return prime > themeSwitchMainBound || switchD > themeSwitchMainBound
 }
 
+// themeSwitchCalibFail reports a generation that is too slow compared
+// with the CPU calibration, independent of renderGradient.
+func themeSwitchCalibFail(generation, calib time.Duration) bool {
+	if calib <= 0 {
+		return true
+	}
+	return generation > time.Duration(float64(calib)*gradCalibFactor)
+}
+
 // themeSwitchGenFail reports a background generation slower than
 // genReadyFactor times the same-process reference.
 func themeSwitchGenFail(shown, reference time.Duration) bool {
@@ -1072,32 +1116,39 @@ func joinDurations(samples []time.Duration) string {
 	return strings.Join(parts, ",")
 }
 
-// runThemeSwitchAttempts measures at most twice. A main-thread overrun
-// fails immediately. A generation over the reference ratio is logged as
-// PERF-RETRY and measured once more. The second pass must pass both gates.
+// runThemeSwitchAttempts measures at most twice. Each sample is recorded
+// before the main-thread gate. A main-thread overrun fails at once and is
+// not retried; if it happens on the second pass, the PERF-RETRY line still
+// lists every attempt. A generation over the reference ratio is measured
+// once more. The second pass must pass both gates.
 func runThemeSwitchAttempts(logf func(string, ...any), testName string, reference time.Duration, measure func() (prime, switchD, shown time.Duration, err error)) ([]time.Duration, error) {
 	var samples []time.Duration
 	limit := generationReadyLimit(reference)
+	logRetry := func() {
+		if len(samples) > 1 {
+			logf("PERF-RETRY: test=%q durations=%s", testName, joinDurations(samples))
+		}
+	}
 	for attempt := 1; attempt <= 2; attempt++ {
 		prime, switchD, shown, err := measure()
 		if err != nil {
 			return samples, err
 		}
+		// Record the sample before the main-thread gate. A later attempt
+		// can fail that gate, and the retry line still has every duration.
+		samples = append(samples, shown)
+		logf("attempt %d duration %s reference %s limit %s ratio %.2f main-prime %s main-switch %s",
+			attempt, shown, reference, limit, float64(shown)/float64(reference), prime, switchD)
 		if themeSwitchMainFail(prime, switchD) {
+			logRetry()
 			return samples, fmt.Errorf("attempt %d main thread prime %s switch %s exceeds %s", attempt, prime, switchD, themeSwitchMainBound)
 		}
-		samples = append(samples, shown)
-		genFail := themeSwitchGenFail(shown, reference)
-		logf("attempt %d duration %s reference %s limit %s ratio %.2f main-prime %s main-switch %s pass=%v",
-			attempt, shown, reference, limit, float64(shown)/float64(reference), prime, switchD, !genFail)
-		if !genFail {
-			if len(samples) > 1 {
-				logf("PERF-RETRY: test=%q durations=%s", testName, joinDurations(samples))
-			}
+		if !themeSwitchGenFail(shown, reference) {
+			logRetry()
 			return samples, nil
 		}
 		if attempt == 2 {
-			logf("PERF-RETRY: test=%q durations=%s", testName, joinDurations(samples))
+			logRetry()
 			return samples, fmt.Errorf("generation %s exceeds %s (%.2f× reference %s) after %d attempts [%s]",
 				shown, limit, float64(shown)/float64(reference), reference, len(samples), joinDurations(samples))
 		}

@@ -79,6 +79,33 @@ func TestThemeSwitchRetryLog(t *testing.T) {
 
 	logs = nil
 	n = 0
+	first := 90 * time.Millisecond
+	second := 40 * time.Millisecond
+	_, err = runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
+		n++
+		if n == 1 {
+			return 20 * time.Microsecond, 30 * time.Microsecond, first, nil
+		}
+		return themeSwitchMainBound + time.Millisecond, 0, second, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "main thread") {
+		t.Fatalf("error %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("retry of a later main-thread failure measured %d times, want 2", n)
+	}
+	retry = perfRetryLine(logs)
+	if retry == "" {
+		t.Fatalf("failed retry did not log PERF-RETRY: %v", logs)
+	}
+	for _, want := range []string{first.String(), second.String()} {
+		if !strings.Contains(retry, want) {
+			t.Fatalf("PERF-RETRY line %q missing duration %s", retry, want)
+		}
+	}
+
+	logs = nil
+	n = 0
 	_, err = runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
 		n++
 		return themeSwitchMainBound + time.Millisecond, 0, ref, nil
@@ -107,21 +134,19 @@ func sprintfTheme(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
 
-// TestThemeSwitchGenerationRegression slows only the measured generation
-// by one reference duration. The reference itself is unslowed, so this is
-// a 2× regression of the bitmap under test and must fail the ratio gate.
+// TestThemeSwitchGenerationRegression slows renderGradient itself, on
+// both the synchronous reference and the async switch, by about 2×.
+// The CPU calibration does not call renderGradient, so that gate fails.
 func TestThemeSwitchGenerationRegression(t *testing.T) {
 	const w, h = 2880, 1800
-	reference := referenceGeneration(w, h)
-	resetGradientCache()
-	gradSync.Store(false)
-	gradMotion.Store(true)
-	now := time.Now()
-	presentGradient(themeLook(themes.ThemeWarm, false), w, h, now)
-	awaitGradients()
+	calib := cpuCalibration()
+	unslowed := referenceGeneration(w, h)
+	if themeSwitchCalibFail(unslowed, calib) {
+		t.Fatalf("unslowed reference %s is already %.2f× calibration %s", unslowed, float64(unslowed)/float64(calib), calib)
+	}
 
 	gateMu.Lock()
-	gradRenderGate = func() { time.Sleep(reference) }
+	gradRenderGate = func() { time.Sleep(unslowed) }
 	gateMu.Unlock()
 	defer func() {
 		gateMu.Lock()
@@ -129,12 +154,23 @@ func TestThemeSwitchGenerationRegression(t *testing.T) {
 		gateMu.Unlock()
 	}()
 
+	slowedRef := referenceGeneration(w, h)
+	resetGradientCache()
+	gradSync.Store(false)
+	gradMotion.Store(true)
+	now := time.Now()
+	presentGradient(themeLook(themes.ThemeWarm, false), w, h, now)
+	awaitGradients()
 	visible := time.Now()
 	presentGradient(themeLook(themes.ThemeTide, false), w, h, now)
 	awaitGradients()
 	shown := time.Since(visible)
-	t.Logf("slowed generation %s reference %s ratio %.2f", shown, reference, float64(shown)/float64(reference))
-	if !themeSwitchGenFail(shown, reference) {
-		t.Fatalf("2× slowdown %s against reference %s was accepted", shown, reference)
+	t.Logf("slowed reference %s slowed switch %s calibration %s ratios %.2f and %.2f",
+		slowedRef, shown, calib, float64(slowedRef)/float64(calib), float64(shown)/float64(calib))
+	if !themeSwitchCalibFail(slowedRef, calib) {
+		t.Fatalf("2× renderGradient reference %s against calibration %s was accepted", slowedRef, calib)
+	}
+	if !themeSwitchCalibFail(shown, calib) {
+		t.Fatalf("2× renderGradient switch %s against calibration %s was accepted", shown, calib)
 	}
 }
