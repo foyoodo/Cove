@@ -33,16 +33,15 @@ func TestThemeSwitchBoundDecision(t *testing.T) {
 	if limit != 75*time.Millisecond {
 		t.Fatalf("limit %s, want 75ms", limit)
 	}
-	// The calibration factor has to sit above the noisiest healthy CI
-	// ratio seen so far (6.51×) and below a real 2× renderGradient on
-	// that runner (about 10.7×). The exact factor is the midpoint of
-	// the multi-run distribution, not this bracket.
+	// Five CI runs put every healthy gate ratio at or under 6.39× and
+	// every slowed-2× ratio at or above 10.07×. The factor has to keep
+	// that whole gap: 6.39× passes, 10.07× fails.
 	calib := 100 * time.Millisecond
-	if themeSwitchCalibFail(651*time.Millisecond, calib) {
-		t.Fatal("6.51× calibration must pass")
+	if themeSwitchCalibFail(639*time.Millisecond, calib) {
+		t.Fatal("6.39× calibration must pass")
 	}
-	if !themeSwitchCalibFail(1070*time.Millisecond, calib) {
-		t.Fatal("10.7× calibration must fail")
+	if !themeSwitchCalibFail(1007*time.Millisecond, calib) {
+		t.Fatal("10.07× calibration must fail")
 	}
 }
 

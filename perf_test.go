@@ -1046,16 +1046,20 @@ func rapidCancel(t *testing.T) (published, aborted int64) {
 // the numerator. The two do not track: the pixel loop is bandwidth-bound
 // and the loop is not, and the ratio depends on the runner.
 //
-// Measured reference/calibration on one 2880×1800 generation:
+// Five separate CI runs of this test job, three suites each, measured
+// the median reference/calibration the gate actually compares:
 //
-//	quiet 4-core host:     about 3.8×
-//	CI, healthy:           5.53×, 5.73×, 5.87×, and one noisy 6.51×
-//	CI, renderGradient ~2×: 10.70×–10.85× (12.6× on that noisy run)
+//	healthy production: min 4.94×, median 5.50×, max 6.39×
+//	healthy precheck:   min 5.11×, median 5.50×, max 6.26×
+//	renderGradient ~2×: reference min 10.07×, median 10.91×, max 12.17×
+//	                    switch    min 10.25×, median 10.95×, max 13.07×
 //
-// 8.5× is the midpoint of the healthy CI band (~5.5–6.5×) and a real 2×
-// on that runner (~10.7–10.9×). One noisy sample can still cross it.
-// runCalibrationAttempts measures the pair again, and the test fails
-// only when the second attempt is also over.
+// The open interval is 6.39× to 10.07×. Its midpoint is 8.2×. 8.5× sits
+// just to the high side of that midpoint: 33% above the highest healthy
+// gate ratio in those runs, and 18% below the lowest 2× ratio (10.07 /
+// 8.5). A single healthy spike still has to clear 8.5× twice, because
+// runCalibrationAttempts remeasures the interleaved pair once. The 16ms
+// main-thread cap is not this factor and is not retried.
 const (
 	genReadyFactor  = 1.5
 	gradCalibFactor = 8.5
