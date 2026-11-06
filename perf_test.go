@@ -1034,12 +1034,15 @@ func rapidCancel(t *testing.T) (published, aborted int64) {
 // same function.
 //
 // gradCalibFactor is the independent guard. cpuCalibration is a fixed
-// arithmetic loop, not renderGradient. On a quiet 4-core host one
-// 2880×1800 generation is about 3.8× that loop. 6.5× leaves room for
-// the 1.2× CI spread and still fails twice the quiet ratio (about 7.6×).
+// arithmetic loop, not renderGradient. A quiet 4-core host generates
+// one 2880×1800 bitmap in about 3.8× that loop. The same generation on
+// the 4-core CI runner is about 6.5×, because the pixel loop is
+// bandwidth-bound and the calibration is not. 7.5× sits above that CI
+// ratio with room for its ~1.2× spread, and below twice the quiet ratio
+// (about 7.6×), so a 2× renderGradient still fails on both machines.
 const (
 	genReadyFactor  = 1.5
-	gradCalibFactor = 6.5
+	gradCalibFactor = 7.5
 )
 
 // cpuCalibration times a fixed CPU-bound loop. It does not call
