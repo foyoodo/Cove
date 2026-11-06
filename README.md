@@ -72,6 +72,7 @@ These builds are a preview. They are unsigned, not a substitute for the Mac app,
 - The Windows zip is unsigned. SmartScreen: More info → Run anyway.
 - UI shortcut labels still show ⌘, but the keys use Ctrl.
 - Box-drawing tables that mix CJK and ASCII may misalign.
+- Windows has no in-window menu bar. Settings is the sidebar's bottom-left button, so configuring an API key is unaffected. Keyboard shortcuts still work.
 
 ## Configure a model
 

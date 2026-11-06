@@ -129,6 +129,27 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+      - name: Linux preview end-to-end
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/e2e-linux.sh .github/scripts/mock-openai.py
+          version=$(python3 -c 'import json; print(json.load(open("mygo.json", encoding="utf-8"))["version"])')
+          .github/scripts/e2e-linux.sh \
+            "Cove-${version}-linux-amd64.tar.gz" \
+            linux-e2e-streaming.png \
+            linux-e2e-complete.png
+
+      - name: Upload linux end-to-end screenshots
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-e2e
+          path: |
+            linux-e2e-streaming.png
+            linux-e2e-complete.png
+          retention-days: 5
+          if-no-files-found: error
+
   windows-smoke:
     name: Windows preview smoke
     needs: ci

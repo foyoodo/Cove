@@ -193,6 +193,26 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+      - name: Linux preview end-to-end
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/e2e-linux.sh .github/scripts/mock-openai.py
+          .github/scripts/e2e-linux.sh \
+            "Cove-${{ steps.version.outputs.version }}-linux-amd64.tar.gz" \
+            linux-e2e-streaming.png \
+            linux-e2e-complete.png
+
+      - name: Upload linux end-to-end screenshots
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-e2e
+          path: |
+            linux-e2e-streaming.png
+            linux-e2e-complete.png
+          retention-days: 5
+          if-no-files-found: error
+
   windows-smoke:
     name: Windows preview smoke
     needs: build
@@ -326,6 +346,7 @@ jobs:
           - The Windows zip is unsigned. SmartScreen: More info → Run anyway.
           - UI shortcut labels still show ⌘, but the keys use Ctrl.
           - Box-drawing tables that mix CJK and ASCII may misalign.
+          - Windows has no in-window menu bar. Settings is the sidebar's bottom-left button, so configuring an API key is unaffected. Keyboard shortcuts still work.
           """
           Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
           PY
