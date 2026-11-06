@@ -176,16 +176,24 @@ func TestGradientStaysNearReference(t *testing.T) {
 
 func TestThemeSwitchMainThreadBound(t *testing.T) {
 	// Serial on purpose: do not call t.Parallel. The main-thread cap is a
-	// hard gate and is not retried. The background generation is compared
-	// with a reference generation in this process, not a fixed 100ms,
-	// because that wall time is the CI machine. One generation over the
-	// ratio is taken again; the second still has to pass.
+	// hard gate and is not retried. Background generation is compared with
+	// a same-process reference, not a fixed 100ms, because that wall time
+	// is the CI machine. The reference is also compared with a CPU
+	// calibration that does not call renderGradient. Either ratio may miss
+	// once; the second measurement has to pass. Calibration samples are
+	// interleaved with reference samples so both see the same machine.
 	const w, h = 2880, 1800
-	calib := cpuCalibration()
-	reference := referenceGeneration(w, h)
-	if themeSwitchCalibFail(reference, calib) {
-		t.Fatalf("reference generation %s is %.2f× the CPU calibration %s (limit %.2f×); renderGradient itself regressed",
-			reference, float64(reference)/float64(calib), calib, gradCalibFactor)
+	reference, calib, err := runCalibrationAttempts(func(format string, args ...any) {
+		t.Helper()
+		t.Logf(format, args...)
+	}, t.Name(), func() (time.Duration, time.Duration) {
+		return measureInterleaved(func(format string, args ...any) {
+			t.Helper()
+			t.Logf(format, args...)
+		}, w, h)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	limit := generationReadyLimit(reference)
 	warm := themeLook(themes.ThemeWarm, false)
@@ -1033,49 +1041,129 @@ func rapidCancel(t *testing.T) (published, aborted int64) {
 // uniform slowdown of renderGradient, because the reference uses the
 // same function.
 //
-// gradCalibFactor is the independent guard. cpuCalibration is a fixed
-// arithmetic loop, not renderGradient. A quiet 4-core host generates
-// one 2880×1800 bitmap in about 3.8× that loop. The same generation on
-// the 4-core CI runner is about 6.5×, because the pixel loop is
-// bandwidth-bound and the calibration is not. 7.5× sits above that CI
-// ratio with room for its ~1.2× spread, and below twice the quiet ratio
-// (about 7.6×), so a 2× renderGradient still fails on both machines.
+// gradCalibFactor is the independent guard. The calibration is a fixed
+// arithmetic loop, not renderGradient, so a slower pixel loop moves only
+// the numerator. The two do not track: the pixel loop is bandwidth-bound
+// and the loop is not, and the ratio depends on the runner.
+//
+// Measured reference/calibration on one 2880×1800 generation:
+//
+//	quiet 4-core host:     about 3.8×
+//	CI, healthy:           5.53×, 5.73×, 5.87×, and one noisy 6.51×
+//	CI, renderGradient ~2×: 10.70×–10.85× (12.6× on that noisy run)
+//
+// 8.5× is the midpoint of the healthy CI band (~5.5–6.5×) and a real 2×
+// on that runner (~10.7–10.9×). One noisy sample can still cross it.
+// runCalibrationAttempts measures the pair again, and the test fails
+// only when the second attempt is also over.
 const (
 	genReadyFactor  = 1.5
-	gradCalibFactor = 7.5
+	gradCalibFactor = 8.5
 )
 
-// cpuCalibration times a fixed CPU-bound loop. It does not call
-// renderGradient, so a slower gradient does not move this clock.
-func cpuCalibration() time.Duration {
-	samples := make([]time.Duration, 3)
-	for i := range samples {
-		const n = 8_000_000
-		start := time.Now()
-		var x uint64 = 1
-		for k := uint64(0); k < n; k++ {
-			x = x*1664525 + 1013904223
-			x ^= x >> 11
-		}
-		if x == 0 {
-			samples[i] = time.Since(start)
-			continue
-		}
-		samples[i] = time.Since(start)
+// oneCPUCalibration times one pass of a fixed CPU-bound loop. It does
+// not call renderGradient, so a slower gradient does not move this clock.
+func oneCPUCalibration() time.Duration {
+	const n = 8_000_000
+	start := time.Now()
+	var x uint64 = 1
+	for k := uint64(0); k < n; k++ {
+		x = x*1664525 + 1013904223
+		x ^= x >> 11
 	}
-	return medianDuration(samples)
+	elapsed := time.Since(start)
+	if x == 0 {
+		return elapsed
+	}
+	return elapsed
 }
 
-func referenceGeneration(w, h int) time.Duration {
+// interleavedCalibration mixes calibration and reference samples so a
+// stall lands on both, instead of timing every calibration pass and
+// then every renderGradient. The reference is the median of three
+// full-resolution renders after one warmup. The calibration is the
+// median of the three loops beside those renders. The slices are the
+// raw samples, in the order they ran.
+func interleavedCalibration(w, h int) (reference, calib time.Duration, refs, calibs []time.Duration) {
 	look := themeLook(themes.ThemeWarm, false)
 	renderGradient(look, w, h, true)
-	samples := make([]time.Duration, 3)
-	for i := range samples {
+	refs = make([]time.Duration, 3)
+	calibs = make([]time.Duration, 3)
+	for i := range refs {
+		calibs[i] = oneCPUCalibration()
 		start := time.Now()
 		renderGradient(look, w, h, true)
-		samples[i] = time.Since(start)
+		refs[i] = time.Since(start)
 	}
-	return medianDuration(samples)
+	return medianDuration(refs), medianDuration(calibs), refs, calibs
+}
+
+func measureInterleaved(logf func(string, ...any), w, h int) (time.Duration, time.Duration) {
+	reference, calib, refs, calibs := interleavedCalibration(w, h)
+	for i := range refs {
+		logf("calib-sample %d reference %s calibration %s ratio %.2f",
+			i+1, refs[i], calibs[i], calibRatio(refs[i], calibs[i]))
+	}
+	return reference, calib
+}
+
+type calibAttempt struct {
+	reference time.Duration
+	calib     time.Duration
+}
+
+func calibRatio(reference, calib time.Duration) float64 {
+	if calib <= 0 {
+		return math.Inf(1)
+	}
+	return float64(reference) / float64(calib)
+}
+
+func calibAttemptFields(attempts []calibAttempt) (durations, ratios string) {
+	refs := make([]string, len(attempts))
+	calibs := make([]string, len(attempts))
+	rats := make([]string, len(attempts))
+	for i, a := range attempts {
+		refs[i] = a.reference.String()
+		calibs[i] = a.calib.String()
+		rats[i] = fmt.Sprintf("%.2f", calibRatio(a.reference, a.calib))
+	}
+	return "reference=" + strings.Join(refs, ",") + " calibration=" + strings.Join(calibs, ","), strings.Join(rats, ",")
+}
+
+// runCalibrationAttempts applies the calibration gate at most twice.
+// Each attempt interleaves a fresh reference with a fresh calibration.
+// The first pair over the factor is measured again. The test fails only
+// when the second pair is also over. A retry logs PERF-RETRY with both
+// attempts' durations and ratios, whether the second passes or fails.
+// The 16ms main-thread cap is not this gate and is not retried.
+func runCalibrationAttempts(logf func(string, ...any), testName string, measure func() (reference, calib time.Duration)) (time.Duration, time.Duration, error) {
+	var attempts []calibAttempt
+	logRetry := func() {
+		if len(attempts) <= 1 {
+			return
+		}
+		durations, ratios := calibAttemptFields(attempts)
+		logf("PERF-RETRY: test=%q durations=%s ratios=%s", testName, durations, ratios)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		reference, calib := measure()
+		sample := calibAttempt{reference: reference, calib: calib}
+		attempts = append(attempts, sample)
+		logf("calibration attempt %d reference %s calibration %s ratio %.2f limit %.2f",
+			attempt, reference, calib, calibRatio(reference, calib), gradCalibFactor)
+		if !themeSwitchCalibFail(reference, calib) {
+			logRetry()
+			return reference, calib, nil
+		}
+		if attempt == 2 {
+			logRetry()
+			durations, ratios := calibAttemptFields(attempts)
+			return reference, calib, fmt.Errorf("reference/calibration exceeded %.2f× after 2 attempts: durations=%s ratios=%s",
+				gradCalibFactor, durations, ratios)
+		}
+	}
+	return 0, 0, fmt.Errorf("calibration was not measured")
 }
 
 func medianDuration(xs []time.Duration) time.Duration {

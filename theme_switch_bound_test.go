@@ -10,6 +10,9 @@ import (
 )
 
 func TestThemeSwitchBoundDecision(t *testing.T) {
+	if themeSwitchMainBound != 16*time.Millisecond {
+		t.Fatalf("main-thread bound is %s", themeSwitchMainBound)
+	}
 	ref := 50 * time.Millisecond
 	if themeSwitchMainFail(50*time.Microsecond, 40*time.Microsecond) {
 		t.Fatal("a few dozen microseconds on the main thread is within 16ms")
@@ -30,6 +33,103 @@ func TestThemeSwitchBoundDecision(t *testing.T) {
 	if limit != 75*time.Millisecond {
 		t.Fatalf("limit %s, want 75ms", limit)
 	}
+	// The calibration factor has to sit above the noisiest healthy CI
+	// ratio seen so far (6.51×) and below a real 2× renderGradient on
+	// that runner (about 10.7×). The exact factor is the midpoint of
+	// the multi-run distribution, not this bracket.
+	calib := 100 * time.Millisecond
+	if themeSwitchCalibFail(651*time.Millisecond, calib) {
+		t.Fatal("6.51× calibration must pass")
+	}
+	if !themeSwitchCalibFail(1070*time.Millisecond, calib) {
+		t.Fatal("10.7× calibration must fail")
+	}
+}
+
+func TestThemeSwitchCalibrationRetry(t *testing.T) {
+	over := calibAttempt{reference: 100 * time.Millisecond, calib: 10 * time.Millisecond}
+	under := calibAttempt{reference: 50 * time.Millisecond, calib: 10 * time.Millisecond}
+	if !themeSwitchCalibFail(over.reference, over.calib) {
+		t.Fatal("100ms against 10ms is over the calibration factor")
+	}
+	if themeSwitchCalibFail(under.reference, under.calib) {
+		t.Fatal("50ms against 10ms is under the calibration factor")
+	}
+
+	t.Run("first over then under", func(t *testing.T) {
+		var logs []string
+		logf := func(format string, args ...any) {
+			logs = append(logs, strings.TrimSpace(sprintfTheme(format, args...)))
+		}
+		script := []calibAttempt{over, under}
+		n := 0
+		reference, calib, err := runCalibrationAttempts(logf, "TestThemeSwitchMainThreadBound", func() (time.Duration, time.Duration) {
+			sample := script[n]
+			n++
+			return sample.reference, sample.calib
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 2 {
+			t.Fatalf("attempts %d, want 2", n)
+		}
+		if reference != under.reference || calib != under.calib {
+			t.Fatalf("kept attempt %s / %s, want the passing second pair", reference, calib)
+		}
+		retry := perfRetryLine(logs)
+		if retry == "" {
+			t.Fatalf("missing PERF-RETRY: %v", logs)
+		}
+		if strings.Count(strings.Join(logs, "\n"), "PERF-RETRY:") != 1 {
+			t.Fatalf("PERF-RETRY count in %v", logs)
+		}
+		for _, want := range []string{
+			`test="TestThemeSwitchMainThreadBound"`,
+			"durations=reference=100ms,50ms calibration=10ms,10ms",
+			"ratios=10.00,5.00",
+		} {
+			if !strings.Contains(retry, want) {
+				t.Fatalf("line %q missing %q", retry, want)
+			}
+		}
+	})
+
+	t.Run("both over", func(t *testing.T) {
+		var logs []string
+		logf := func(format string, args ...any) {
+			logs = append(logs, strings.TrimSpace(sprintfTheme(format, args...)))
+		}
+		n := 0
+		_, _, err := runCalibrationAttempts(logf, "TestThemeSwitchMainThreadBound", func() (time.Duration, time.Duration) {
+			n++
+			return over.reference, over.calib
+		})
+		if err == nil {
+			t.Fatal("two calibration pairs over the factor returned success")
+		}
+		if n != 2 {
+			t.Fatalf("attempts %d, want 2", n)
+		}
+		if strings.Count(strings.Join(logs, "\n"), "PERF-RETRY:") != 1 {
+			t.Fatalf("PERF-RETRY count in %v", logs)
+		}
+		retry := perfRetryLine(logs)
+		for _, want := range []string{
+			`test="TestThemeSwitchMainThreadBound"`,
+			"durations=reference=100ms,100ms calibration=10ms,10ms",
+			"ratios=10.00,10.00",
+		} {
+			if !strings.Contains(retry, want) {
+				t.Fatalf("line %q missing %q", retry, want)
+			}
+		}
+		for _, want := range []string{"durations=reference=100ms,100ms", "ratios=10.00,10.00"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q missing %q", err, want)
+			}
+		}
+	})
 }
 
 func TestThemeSwitchRetryLog(t *testing.T) {
@@ -137,12 +237,20 @@ func sprintfTheme(format string, args ...any) string {
 // TestThemeSwitchGenerationRegression slows renderGradient itself, on
 // both the synchronous reference and the async switch, by about 2×.
 // The CPU calibration does not call renderGradient, so that gate fails.
+// The unslowed precheck uses the same one-retry calibration gate as
+// the production test. The slowed pair is not retried into a pass: it
+// has to be rejected.
 func TestThemeSwitchGenerationRegression(t *testing.T) {
 	const w, h = 2880, 1800
-	calib := cpuCalibration()
-	unslowed := referenceGeneration(w, h)
-	if themeSwitchCalibFail(unslowed, calib) {
-		t.Fatalf("unslowed reference %s is already %.2f× calibration %s", unslowed, float64(unslowed)/float64(calib), calib)
+	logf := func(format string, args ...any) {
+		t.Helper()
+		t.Logf(format, args...)
+	}
+	unslowed, _, err := runCalibrationAttempts(logf, t.Name(), func() (time.Duration, time.Duration) {
+		return measureInterleaved(logf, w, h)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	gateMu.Lock()
@@ -154,7 +262,7 @@ func TestThemeSwitchGenerationRegression(t *testing.T) {
 		gateMu.Unlock()
 	}()
 
-	slowedRef := referenceGeneration(w, h)
+	slowedRef, slowedCalib := measureInterleaved(logf, w, h)
 	resetGradientCache()
 	gradSync.Store(false)
 	gradMotion.Store(true)
@@ -166,11 +274,11 @@ func TestThemeSwitchGenerationRegression(t *testing.T) {
 	awaitGradients()
 	shown := time.Since(visible)
 	t.Logf("slowed reference %s slowed switch %s calibration %s ratios %.2f and %.2f",
-		slowedRef, shown, calib, float64(slowedRef)/float64(calib), float64(shown)/float64(calib))
-	if !themeSwitchCalibFail(slowedRef, calib) {
-		t.Fatalf("2× renderGradient reference %s against calibration %s was accepted", slowedRef, calib)
+		slowedRef, shown, slowedCalib, calibRatio(slowedRef, slowedCalib), calibRatio(shown, slowedCalib))
+	if !themeSwitchCalibFail(slowedRef, slowedCalib) {
+		t.Fatalf("2× renderGradient reference %s against calibration %s was accepted", slowedRef, slowedCalib)
 	}
-	if !themeSwitchCalibFail(shown, calib) {
-		t.Fatalf("2× renderGradient switch %s against calibration %s was accepted", shown, calib)
+	if !themeSwitchCalibFail(shown, slowedCalib) {
+		t.Fatalf("2× renderGradient switch %s against calibration %s was accepted", shown, slowedCalib)
 	}
 }

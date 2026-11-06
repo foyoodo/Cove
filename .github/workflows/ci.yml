@@ -59,7 +59,9 @@ jobs:
 
       - name: Test
         # Three verbose runs record TestThemeSwitchMainThreadBound's
-        # absolute generation time. -v keeps PERF-RETRY lines on a pass.
+        # absolute generation time. -v keeps PERF-RETRY lines on a pass,
+        # including a calibration-gate retry: test name plus both
+        # attempts' reference and calibration durations and their ratios.
         # The main package takes several minutes; the default 10m limit is close.
         run: |
           set -euo pipefail

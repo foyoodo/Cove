@@ -100,9 +100,12 @@ jobs:
           fc-match sans-serif
 
       - name: Test
-        # -v prints every --- SKIP line. The summary counts pass, fail, and
-        # skip, including when the suite fails. The main package takes
-        # several minutes; the default 10m limit is close.
+        # -v prints every --- SKIP line and every PERF-RETRY line, including
+        # a calibration-gate retry (test name, both attempts' reference
+        # and calibration durations, and their ratios). The summary counts
+        # pass, fail, and skip, including when the suite fails, and prints
+        # each PERF-RETRY line. The main package takes several minutes;
+        # the default 10m limit is close.
         run: |
           set -euo pipefail
           log="${RUNNER_TEMP}/go-test.txt"
