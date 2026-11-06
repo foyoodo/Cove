@@ -40,8 +40,9 @@ func (systemKeyring) Delete(id string) error {
 func secretAccount(id string) string { return "conn/" + id }
 
 // fileKeyring is the fallback where the credential store is missing
-// (Linux without a Secret Service). It is a private file next to the
-// conversations, not inside them.
+// (Linux without a Secret Service, or any system where the store
+// probe fails). It is a private file next to the conversations, not
+// inside them, created mode 0600.
 type fileKeyring struct {
 	path string
 	mu   sync.Mutex

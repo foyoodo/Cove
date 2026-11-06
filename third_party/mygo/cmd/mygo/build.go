@@ -265,8 +265,12 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		var icns []byte
 		if car != nil && car.icns != nil {
 			icns = car.icns // the .icon's own rendering for older macOS
-		} else if icns, err = appIcon(c); err != nil {
-			return nil, err
+		} else if car == nil {
+			// A top-level icon PNG is for Windows/Linux. Do not turn it
+			// into AppIcon.icns when macos.icon already supplies Assets.car.
+			if icns, err = appIcon(c); err != nil {
+				return nil, err
+			}
 		}
 		app, err := writeBundle(c, stage, bin, icns, car, res)
 		if err != nil {

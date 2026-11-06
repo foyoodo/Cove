@@ -150,6 +150,84 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      - name: Build linux/amd64 and windows/amd64
+        run: CGO_ENABLED=0 go tool mygo build -platform linux/amd64,windows/amd64
+
+      - name: Compile windows/arm64
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o /dev/null .
+
+      - name: Package linux and windows preview archives
+        run: .github/scripts/package-preview.sh
+
+      - name: Upload linux and windows preview packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: preview-winlinux
+          path: |
+            Cove-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+            Cove-${{ steps.version.outputs.version }}-linux-amd64.tar.gz.sha256
+            Cove-${{ steps.version.outputs.version }}-windows-amd64.zip
+            Cove-${{ steps.version.outputs.version }}-windows-amd64.zip.sha256
+          retention-days: 5
+          if-no-files-found: error
+
+      - name: Linux preview smoke
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 \
+            xvfb \
+            x11-utils \
+            xdotool \
+            scrot \
+            openbox
+          .github/scripts/smoke-linux.sh "Cove-${{ steps.version.outputs.version }}-linux-amd64.tar.gz" linux-smoke.png
+
+      - name: Upload linux smoke screenshot
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-smoke
+          path: linux-smoke.png
+          retention-days: 5
+          if-no-files-found: ignore
+
+  windows-smoke:
+    name: Windows preview smoke
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download preview packages
+        uses: actions/download-artifact@v7
+        with:
+          name: preview-winlinux
+          path: preview
+
+      - name: Launch Cove.exe
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path preview -Filter "Cove-*-windows-amd64.zip" |
+            Where-Object { $_.Name -notlike "*.sha256" } |
+            Select-Object -First 1
+          if (-not $zip) { throw "missing windows zip" }
+          .\.github\scripts\smoke-windows.ps1 -Archive $zip.FullName -Screenshot windows-smoke.png
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-smoke
+          path: windows-smoke.png
+          retention-days: 5
+          if-no-files-found: error
+
   sign:
     name: Sign, verify, and launch
     needs: build
@@ -190,7 +268,7 @@ jobs:
 
   release:
     name: Publish
-    needs: [build, sign]
+    needs: [build, sign, windows-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -203,6 +281,12 @@ jobs:
         with:
           name: signed-darwin-apps
           path: signed
+
+      - name: Download linux and windows preview packages
+        uses: actions/download-artifact@v7
+        with:
+          name: preview-winlinux
+          path: preview
 
       - name: Publish the GitHub Release
         env:
@@ -230,14 +314,33 @@ jobs:
           ```
 
           Open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'. macOS will say the developer cannot be verified. That is expected for an ad-hoc signed app.
+
+          ## Windows and Linux (preview)
+
+          `Cove-{version}-windows-amd64.zip` and `Cove-{version}-linux-amd64.tar.gz` are unsigned preview builds. They are not a substitute for the Mac app.
+
+          Known issues:
+
+          - Linux needs GTK 3.
+          - Without a CJK font, Chinese shows as boxes.
+          - The Windows zip is unsigned. SmartScreen: More info → Run anyway.
+          - UI shortcut labels still show ⌘, but the keys use Ctrl.
+          - Box-drawing tables that mix CJK and ASCII may misalign.
           """
           Path(os.environ["RUNNER_TEMP"], "install-notes.md").write_text(text)
           PY
           arm64=$(find signed -name "Cove-${VERSION}-darwin-arm64.zip" -print -quit)
           universal=$(find signed -name "Cove-${VERSION}-darwin-universal.zip" -print -quit)
+          linux=$(find preview -name "Cove-${VERSION}-linux-amd64.tar.gz" -print -quit)
+          windows=$(find preview -name "Cove-${VERSION}-windows-amd64.zip" -print -quit)
           if [[ -z $arm64 || -z $universal || ! -f ${arm64}.sha256 || ! -f ${universal}.sha256 ]]; then
             echo "signed artifacts are missing" >&2
             find signed -print >&2
+            exit 1
+          fi
+          if [[ -z $linux || -z $windows || ! -f ${linux}.sha256 || ! -f ${windows}.sha256 ]]; then
+            echo "preview artifacts are missing" >&2
+            find preview -print >&2
             exit 1
           fi
           args=(
@@ -250,5 +353,10 @@ jobs:
           if [[ $VERSION == *-* ]]; then
             args+=(--prerelease)
           fi
-          args+=("$arm64" "${arm64}.sha256" "$universal" "${universal}.sha256")
+          args+=(
+            "$arm64" "${arm64}.sha256"
+            "$universal" "${universal}.sha256"
+            "$linux" "${linux}.sha256"
+            "$windows" "${windows}.sha256"
+          )
           "${args[@]}"

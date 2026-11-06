@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -78,11 +79,11 @@ func themeDebugPath() string {
 			return s
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	dir, err := mygo.App.Path(mygo.PathLogs)
+	if err != nil || dir == "" {
 		return ""
 	}
-	return filepath.Join(home, "Library", "Logs", "Cove", "theme-debug.log")
+	return filepath.Join(dir, "theme-debug.log")
 }
 
 // bitmapImageID is the scene.Image id Metal and GL use as the texture key.

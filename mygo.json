@@ -4,6 +4,7 @@
   "version": "0.7.0",
   "copyright": "Copyright © 2026",
   "out": "build",
+  "icon": "icon/winlinux/cove.png",
   "macos": {
     "icon": "icon/compiled/Assets.car",
     "minimumSystemVersion": "13.0",

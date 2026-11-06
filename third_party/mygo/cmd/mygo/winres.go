@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,27 +46,23 @@ func winresSyso(c *Config, goarch string) ([]byte, error) {
 		rtManifest: {1: []byte(windowsManifest(c))},
 	}
 	if c.Icon != "" {
-		src, err := os.ReadFile(c.path(c.Icon))
-		if err != nil {
-			return nil, err
-		}
-		images, err := iconImages(src)
+		icons, err := windowsIconResources(c)
 		if err != nil {
 			return nil, fmt.Errorf("icon: %w", err)
 		}
 		res[rtIcon] = map[uint16][]byte{}
 		var group bytes.Buffer
-		_ = binary.Write(&group, binary.LittleEndian, [3]uint16{0, 1, uint16(len(images))})
-		for i, img := range images {
+		_ = binary.Write(&group, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icons))})
+		for i, img := range icons {
 			id := uint16(i + 1)
-			res[rtIcon][id] = img
-			dim := byte(windowsIconSizes[i])
-			if windowsIconSizes[i] >= 256 {
+			res[rtIcon][id] = img.data
+			dim := byte(img.size)
+			if img.size >= 256 {
 				dim = 0
 			}
-			group.Write([]byte{dim, dim, 0, 0})
-			_ = binary.Write(&group, binary.LittleEndian, [2]uint16{1, 32})
-			_ = binary.Write(&group, binary.LittleEndian, uint32(len(img)))
+			group.Write([]byte{dim, dim, img.colors, 0})
+			_ = binary.Write(&group, binary.LittleEndian, [2]uint16{img.planes, img.bitCount})
+			_ = binary.Write(&group, binary.LittleEndian, uint32(len(img.data)))
 			_ = binary.Write(&group, binary.LittleEndian, id)
 		}
 		res[rtGroupIcon] = map[uint16][]byte{1: group.Bytes()}
@@ -300,4 +297,98 @@ func (n verNode) encode() []byte {
 		binary.LittleEndian.PutUint16(b[4:], 1)
 	}
 	return b
+}
+
+// iconResource is one image in a Windows icon group: size in pixels and
+// the RT_ICON payload (PNG or DIB).
+type iconResource struct {
+	size     int
+	planes   uint16
+	bitCount uint16
+	colors   byte
+	data     []byte
+}
+
+// windowsIconResources loads the images linked into the executable. When a
+// .ico sits next to the configured PNG, that file is used as-is so the
+// window, taskbar, and .exe show the designed sizes. Otherwise the PNG is
+// scaled to the usual Windows sizes.
+func windowsIconResources(c *Config) ([]iconResource, error) {
+	pngPath := c.path(c.Icon)
+	icoPath := strings.TrimSuffix(pngPath, filepath.Ext(pngPath)) + ".ico"
+	if fileExists(icoPath) {
+		src, err := os.ReadFile(icoPath)
+		if err != nil {
+			return nil, err
+		}
+		return parseICOResources(src)
+	}
+	src, err := os.ReadFile(pngPath)
+	if err != nil {
+		return nil, err
+	}
+	images, err := iconImages(src)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]iconResource, len(images))
+	for i, img := range images {
+		out[i] = iconResource{size: windowsIconSizes[i], planes: 1, bitCount: 32, data: img}
+	}
+	return out, nil
+}
+
+func parseICOResources(src []byte) ([]iconResource, error) {
+	if len(src) < 6 {
+		return nil, fmt.Errorf("ico is truncated")
+	}
+	if binary.LittleEndian.Uint16(src[0:]) != 0 || binary.LittleEndian.Uint16(src[2:]) != 1 {
+		return nil, fmt.Errorf("not a Windows icon")
+	}
+	n := int(binary.LittleEndian.Uint16(src[4:]))
+	if n < 1 {
+		return nil, fmt.Errorf("ico has no images")
+	}
+	out := make([]iconResource, 0, n)
+	for i := 0; i < n; i++ {
+		off := 6 + i*16
+		if off+16 > len(src) {
+			return nil, fmt.Errorf("ico directory is truncated")
+		}
+		w, h := int(src[off]), int(src[off+1])
+		if w == 0 {
+			w = 256
+		}
+		if h == 0 {
+			h = 256
+		}
+		size := w
+		if h > size {
+			size = h
+		}
+		planes := binary.LittleEndian.Uint16(src[off+4:])
+		bitCount := binary.LittleEndian.Uint16(src[off+6:])
+		nbytes := int(binary.LittleEndian.Uint32(src[off+8:]))
+		imgOff := int(binary.LittleEndian.Uint32(src[off+12:]))
+		if imgOff < 0 || nbytes < 1 || imgOff+nbytes > len(src) {
+			return nil, fmt.Errorf("ico image %d is truncated", i)
+		}
+		if planes == 0 {
+			planes = 1
+		}
+		if bitCount == 0 {
+			bitCount = 32
+		}
+		data := make([]byte, nbytes)
+		copy(data, src[imgOff:imgOff+nbytes])
+		out = append(out, iconResource{
+			size:     size,
+			planes:   planes,
+			bitCount: bitCount,
+			colors:   src[off+2],
+			data:     data,
+		})
+	}
+	slices.SortFunc(out, func(a, b iconResource) int { return a.size - b.size })
+	return out, nil
 }
