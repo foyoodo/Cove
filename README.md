@@ -1,6 +1,6 @@
 # Cove
 
-Cove is a native macOS chat client. It draws its interface with [MyGo](https://mygo.egoist.dev/docs)'s `ui` package, not a web view, and it talks to OpenAI-compatible Chat Completions endpoints (`POST {baseURL}/chat/completions`, streaming). Replies render as Markdown as they arrive. Chats stay on this Mac.
+Cove is a native chat client. It draws its interface with [MyGo](https://mygo.egoist.dev/docs)'s `ui` package, not a web view, and it talks to OpenAI-compatible Chat Completions endpoints (`POST {baseURL}/chat/completions`, streaming). Replies render as Markdown as they arrive. macOS is the supported platform. Windows and Linux builds are an unsigned **preview**.
 
 The current release is 0.7.0.
 
@@ -8,7 +8,7 @@ The current release is 0.7.0.
 
 - Presets for OpenAI, Anthropic, DeepSeek, OpenRouter, xAI, and Ollama, plus a custom endpoint. A new chat inherits the default model, base URL, and reasoning settings.
 - Streaming Markdown, with a copy button on code blocks. Reasoning text, when the model sends it, is shown above the answer and is not sent back on later requests.
-- Chats are stored as JSONL under Application Support. API keys are stored in the macOS login keychain, not in the chat files.
+- Chats are stored as JSONL under Application Support (or the platform equivalent). API keys are stored in the macOS login keychain, Windows Credential Manager, or libsecret, not in the chat files. If that store is missing, they go in a sibling `.keys` file mode 0600.
 - Find in the open chat, quotes taken from a selection, and per-chat settings for the model, temperature, max tokens, reasoning, system prompt, and extra request JSON.
 - Six themes (Warm, Tide, Graphite, Mist, Sage, Lavender), each in light and dark. Appearance can follow the system or be pinned to light or dark.
 
@@ -16,7 +16,9 @@ The current release is 0.7.0.
 
 Cove runs on Apple Silicon and on Intel Macs. The Apple Silicon archive is `darwin/arm64`. Intel Macs need the universal archive, `darwin/universal`, which contains arm64 and x86_64 in one app and also runs on Apple Silicon. Both need macOS 13 or newer. Info.plist records that as `LSMinimumSystemVersion`, which is what Finder enforces.
 
-Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux machine can cross-compile either Mac app, including the fat binary.
+Windows and Linux x64 preview archives also ship. They need a 64-bit OS. Linux needs GTK 3.
+
+Building from source needs Go 1.27 or newer. MyGo does not use cgo, so a Linux machine can cross-compile the Mac apps, including the fat binary, and the Windows and Linux preview binaries.
 
 ## Install
 
@@ -56,6 +58,22 @@ Use the path where you actually put the `.app`. Open it once, then go to System 
 
 A disk image can only be produced on a Mac. A cross-compile produces the `.app`.
 
+### Windows and Linux (preview)
+
+These builds are a preview. They are unsigned, not a substitute for the Mac app, and they are not offered through Homebrew.
+
+- Windows: unzip `Cove-<version>-windows-amd64.zip` and run `Cove.exe`.
+- Linux: extract `Cove-<version>-linux-amd64.tar.gz` and run `./cove`. GTK 3 must be installed (`libgtk-3-0` on Debian/Ubuntu).
+
+#### Known issues
+
+- Linux needs GTK 3.
+- Without a CJK font, Chinese shows as boxes.
+- The Windows zip is unsigned. SmartScreen: More info → Run anyway.
+- UI shortcut labels still show ⌘, but the keys use Ctrl.
+- Box-drawing tables that mix CJK and ASCII may misalign.
+- Windows has no in-window menu bar. Settings is the sidebar's bottom-left button, so configuring an API key is unaffected. Keyboard shortcuts still work.
+
 ## Configure a model
 
 The first launch has no chats. Open Settings from the sidebar gear or from **File → Settings…** (⌘,) and choose a provider. The preset fills the usual base URL and model id. Custom keeps the URL you type.
@@ -78,17 +96,20 @@ Settings for the whole app are a separate window. **More → Chat Settings…** 
 ```sh
 CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
 CGO_ENABLED=0 go tool mygo build -platform darwin/universal
+CGO_ENABLED=0 go tool mygo build -platform linux/amd64,windows/amd64
 go test ./...
 go vet ./...
 ```
 
-The Apple Silicon `.app` is written to `build/darwin-arm64/`. The universal `.app` is written to `build/darwin-universal/`. `darwin/universal` compiles arm64 and amd64, then merges them into one fat Mach-O. MyGo does that without `lipo`, so the universal app cross-compiles on Linux. The build copies `icon/compiled/Assets.car` and `resources/Cove.icns` into the bundle. Those icon files are already compiled; do not regenerate them. `mygo.json` sets the bundle name, the version, and the Info.plist icon keys.
+The Apple Silicon `.app` is written to `build/darwin-arm64/`. The universal `.app` is written to `build/darwin-universal/`. `darwin/universal` compiles arm64 and amd64, then merges them into one fat Mach-O. MyGo does that without `lipo`, so the universal app cross-compiles on Linux. The build copies `icon/compiled/Assets.car` and `resources/Cove.icns` into the bundle. Those icon files are already compiled; do not regenerate them. `mygo.json` sets the bundle name, the version, and the Info.plist icon keys. The top-level `icon` PNG is for Windows and Linux only; it does not replace the macOS Assets.car.
+
+Linux and Windows preview binaries go to `build/linux-amd64/` and `build/windows-amd64/`. CI wraps them as `Cove-<version>-linux-amd64.tar.gz` and `Cove-<version>-windows-amd64.zip`. It does not publish a .deb, an NSIS installer, an AppImage, an MSI, or arm64 packages.
 
 `go tool mygo dev` runs the app from source on a Mac.
 
 ## Releases and CI
 
-Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal`. MyGo needs no cgo, so both Mac apps cross-compile on Linux. The universal build is what compiles `darwin/amd64`. A macOS job then ad-hoc signs both bundles with `codesign --force --deep -s -`, checks `lipo -info` and `codesign --verify --deep --strict`, and launches the arm64 slice and the x86_64 slice under Rosetta. That job fails the workflow if any of those checks fail. It uploads `Cove-darwin-arm64.zip` and `Cove-darwin-universal.zip` and keeps them for 5 days.
+Pushes to `main` and pull requests run on Ubuntu: `go vet ./...`, `go test ./...`, and `CGO_ENABLED=0 go tool mygo build -platform darwin/arm64,darwin/universal`. MyGo needs no cgo, so both Mac apps cross-compile on Linux. The universal build is what compiles `darwin/amd64`. The same Ubuntu job then builds `linux/amd64` and `windows/amd64` (`CGO_ENABLED=0`) and uploads `Cove-<version>-linux-amd64.tar.gz` and `Cove-<version>-windows-amd64.zip` with `.sha256` files. A `windows-latest` job launches `Cove.exe`, checks that the main window appears, takes a screenshot, and exits. A macOS job then ad-hoc signs both bundles with `codesign --force --deep -s -`, checks `lipo -info` and `codesign --verify --deep --strict`, and launches the arm64 slice and the x86_64 slice under Rosetta. That job fails the workflow if any of those checks fail. It uploads `Cove-darwin-arm64.zip` and `Cove-darwin-universal.zip` and keeps them for 5 days.
 
 A release tag has to match `mygo.json`. The release workflow fails when the tag, without the leading `v`, is not the `version` field. `Cove.app` keeps the version from `mygo.json`.
 
@@ -99,7 +120,7 @@ A release tag has to match `mygo.json`. The release workflow fails when the tag,
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The tag push runs the tests, builds both apps on Ubuntu, ad-hoc signs them on macOS, and publishes four release assets: `Cove-X.Y.Z-darwin-arm64.zip`, `Cove-X.Y.Z-darwin-arm64.zip.sha256`, `Cove-X.Y.Z-darwin-universal.zip`, and `Cove-X.Y.Z-darwin-universal.zip.sha256`. The arm64 names and the checksum file format are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'). The builds are ad-hoc signed and not notarized. Both need macOS 13 or newer.
+The tag push runs the tests, builds both Mac apps on Ubuntu, ad-hoc signs them on macOS, builds the Windows and Linux preview packages, and publishes eight release assets: the two darwin zips and their `.sha256` files, plus `Cove-X.Y.Z-linux-amd64.tar.gz`, `Cove-X.Y.Z-linux-amd64.tar.gz.sha256`, `Cove-X.Y.Z-windows-amd64.zip`, and `Cove-X.Y.Z-windows-amd64.zip.sha256`. The darwin arm64 names, checksum file format, signing, and notarization (none) are unchanged. The notes are the generated changelog plus the install steps: pick the arm64 zip on Apple Silicon or the universal zip on an Intel Mac, unzip, move `Cove.app` to `/Applications`, and run `xattr -dr com.apple.quarantine /Applications/Cove.app` (or open it once, then go to System Settings > Privacy & Security and click 'Open Anyway'). The Mac builds are ad-hoc signed and not notarized. Both need macOS 13 or newer. The Windows and Linux archives are marked preview in those notes.
 
 A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as a prerelease. To build an existing tag by hand, open Actions, choose Release, run the workflow, and enter the tag, including the leading `v`.
 
@@ -110,6 +131,7 @@ A hyphenated version such as `0.8.0-rc.1`, tagged `v0.8.0-rc.1`, is published as
 *.go                 the app: chat, storage, providers, and the window
 themes/              palettes; tokens.json is the color and layout source
 icon/                compiled Assets.car and the 1024px source PNG
+icon/winlinux/       Windows .ico and Linux PNG (does not change the Mac app icon)
 resources/Cove.icns  the icon used on macOS 12–15
 tools/inkgap/        glyph-ink measurement used by the layout
 testdata/            images the layout tests open

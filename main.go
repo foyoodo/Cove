@@ -93,10 +93,15 @@ func (a *App) openWindow() {
 	if !a.data.RestoreLast {
 		a.data.ActiveID = ""
 	}
+	// 1120×760 is the designed size. On Windows and Linux it is clamped
+	// to the monitor work area (minus a margin, never below 720×520) so
+	// a 1024×768 runner or a 1366×768 laptop still shows the whole
+	// window, centered. macOS keeps 1120×760.
+	width, height := fitWindowToWorkArea(1120, 760, 720, 520)
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:  "Cove",
-		Width:  1120,
-		Height: 760,
+		Width:  width,
+		Height: height,
 		// The suggestion grid and the composer hold at 720×520. Shorter
 		// than that, a single column of cards collides with the composer.
 		MinWidth:       720,
@@ -133,10 +138,11 @@ func (a *App) openSettingsWindow() {
 		return
 	}
 	lights := mygo.Point{X: 20, Y: 20}
+	width, height := fitWindowToWorkArea(780, 560, 720, 520)
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:                settingsWindowTitle(a.settingsSection),
-		Width:                780,
-		Height:               560,
+		Width:                width,
+		Height:               height,
 		MinWidth:             720,
 		MinHeight:            520,
 		TitleBarStyle:        mygo.TitleBarHiddenInset,

@@ -123,6 +123,106 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # Preview packages: unsigned linux/amd64 tar.gz and windows/amd64 zip.
+      # Not a .deb, NSIS installer, AppImage, MSI, or arm64 archive.
+      - name: Build linux/amd64 and windows/amd64
+        run: CGO_ENABLED=0 go tool mygo build -platform linux/amd64,windows/amd64
+
+      - name: Compile windows/arm64
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o /dev/null .
+
+      - name: Package linux and windows preview archives
+        run: .github/scripts/package-preview.sh
+
+      - name: Upload linux and windows preview packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: preview-winlinux
+          path: |
+            Cove-*-linux-amd64.tar.gz
+            Cove-*-linux-amd64.tar.gz.sha256
+            Cove-*-windows-amd64.zip
+            Cove-*-windows-amd64.zip.sha256
+          retention-days: 5
+          if-no-files-found: error
+
+      - name: Linux preview smoke
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 \
+            xvfb \
+            x11-utils \
+            xdotool \
+            scrot \
+            openbox
+          version=$(python3 -c 'import json; print(json.load(open("mygo.json", encoding="utf-8"))["version"])')
+          .github/scripts/smoke-linux.sh "Cove-${version}-linux-amd64.tar.gz" linux-smoke.png
+
+      - name: Upload linux smoke screenshot
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-smoke
+          path: linux-smoke.png
+          retention-days: 5
+          if-no-files-found: ignore
+
+      - name: Linux preview end-to-end
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/e2e-linux.sh .github/scripts/mock-openai.py
+          version=$(python3 -c 'import json; print(json.load(open("mygo.json", encoding="utf-8"))["version"])')
+          .github/scripts/e2e-linux.sh \
+            "Cove-${version}-linux-amd64.tar.gz" \
+            linux-e2e-streaming.png \
+            linux-e2e-complete.png
+
+      - name: Upload linux end-to-end screenshots
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-e2e
+          path: |
+            linux-e2e-streaming.png
+            linux-e2e-complete.png
+          retention-days: 5
+          if-no-files-found: error
+
+  windows-smoke:
+    name: Windows preview smoke
+    needs: ci
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download preview packages
+        uses: actions/download-artifact@v7
+        with:
+          name: preview-winlinux
+          path: preview
+
+      - name: Launch Cove.exe
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path preview -Filter "Cove-*-windows-amd64.zip" |
+            Where-Object { $_.Name -notlike "*.sha256" } |
+            Select-Object -First 1
+          if (-not $zip) { throw "missing windows zip" }
+          .\.github\scripts\smoke-windows.ps1 -Archive $zip.FullName -Screenshot windows-smoke.png
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-smoke
+          path: windows-smoke.png
+          retention-days: 5
+          if-no-files-found: error
+
   sign-macos:
     name: Sign, verify, and launch
     needs: ci
