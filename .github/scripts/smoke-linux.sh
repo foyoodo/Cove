@@ -34,6 +34,7 @@ need() {
 need tar
 need xvfb-run
 need xdotool
+need xwininfo
 need scrot
 
 work=$(mktemp -d)
@@ -115,6 +116,32 @@ fi
 xdotool windowactivate "$wid" || true
 sleep 1
 scrot -z "$screenshot"
+
+root_info=$(xwininfo -root)
+win_info=$(xwininfo -id "$wid")
+parse_geom() {
+  awk '
+    /Absolute upper-left X:/ { x=$4 }
+    /Absolute upper-left Y:/ { y=$4 }
+    /^  Width:/ { w=$2 }
+    /^  Height:/ { h=$2 }
+    END { printf "%s %s %s %s", x, y, w, h }
+  '
+}
+read -r sx sy sw sh <<<"$(printf '%s\n' "$root_info" | parse_geom)"
+read -r wx wy ww wh <<<"$(printf '%s\n' "$win_info" | parse_geom)"
+echo "linux window rect ${wx},${wy} ${ww}x${wh} vs Xvfb screen ${sx},${sy} ${sw}x${sh}"
+xdotool getwindowgeometry "$wid" || true
+if [[ -z $sx || -z $sy || -z $sw || -z $sh || -z $wx || -z $wy || -z $ww || -z $wh ]]; then
+  echo "could not parse window/screen geometry" >&2
+  printf '%s\n' "$root_info" "$win_info" >&2
+  exit 1
+fi
+if (( wx < sx || wy < sy || wx + ww > sx + sw || wy + wh > sy + sh )); then
+  echo "window rect is outside the Xvfb screen" >&2
+  exit 1
+fi
+
 xdotool windowclose "$wid" || true
 for _ in $(seq 1 20); do
   if ! kill -0 "$pid" 2>/dev/null; then

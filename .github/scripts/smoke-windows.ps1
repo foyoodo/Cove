@@ -22,6 +22,8 @@ public static class CoveNative {
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
+  public const uint SPI_GETWORKAREA = 0x0030;
 }
 "@
 
@@ -35,6 +37,10 @@ try {
     $exe = Join-Path $work "Cove.exe"
     if (-not (Test-Path -LiteralPath $exe)) {
         throw "archive has no Cove.exe"
+    }
+    $icns = Get-ChildItem -LiteralPath $work -Recurse -Filter *.icns -ErrorAction SilentlyContinue
+    if ($icns) {
+        throw "windows zip ships $($icns.Name); Windows does not use .icns (embedded PNG + cove.ico)"
     }
 
     $proc = Start-Process -FilePath $exe -PassThru -WorkingDirectory $work
@@ -77,6 +83,21 @@ try {
     finally {
         $g.Dispose()
         $bmp.Dispose()
+    }
+
+    $spi = New-Object CoveNative+RECT
+    if (-not [CoveNative]::SystemParametersInfo([CoveNative]::SPI_GETWORKAREA, 0, [ref]$spi, 0)) {
+        throw "SPI_GETWORKAREA failed"
+    }
+    $working = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    Write-Host ("windows window rect L={0} T={1} R={2} B={3} ({4}x{5})" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bottom, $w, $h)
+    Write-Host ("SPI_GETWORKAREA     L={0} T={1} R={2} B={3} ({4}x{5})" -f $spi.Left, $spi.Top, $spi.Right, $spi.Bottom, ($spi.Right - $spi.Left), ($spi.Bottom - $spi.Top))
+    Write-Host ("Screen.WorkingArea  L={0} T={1} R={2} B={3} ({4}x{5})" -f $working.Left, $working.Top, $working.Right, $working.Bottom, $working.Width, $working.Height)
+    if ($rect.Left -lt $spi.Left -or $rect.Top -lt $spi.Top -or $rect.Right -gt $spi.Right -or $rect.Bottom -gt $spi.Bottom) {
+        throw "window rect is outside SPI_GETWORKAREA"
+    }
+    if ($rect.Left -lt $working.Left -or $rect.Top -lt $working.Top -or $rect.Right -gt $working.Right -or $rect.Bottom -gt $working.Bottom) {
+        throw "window rect is outside Screen.WorkingArea"
     }
 
     if (-not $proc.CloseMainWindow()) {

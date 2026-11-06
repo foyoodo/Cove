@@ -71,7 +71,8 @@ PY
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 # Ship the exe and the files MyGo copied next to it. Skip NSIS if a local
-# build produced one.
+# build produced one. Skip Cove.icns: Windows does not load it. The in-app
+# mark is the embedded PNG (app_icon.go); Explorer uses cove.ico.
 python3 - "$win_dir" "$stage" <<'PY'
 import os, shutil, sys
 
@@ -81,7 +82,7 @@ for name in sorted(os.listdir(src)):
     lower = name.lower()
     if lower.endswith(".exe") and name != "Cove.exe":
         continue
-    if lower.endswith((".nsi", ".deb", ".msi")) or lower == "install.sh":
+    if lower.endswith((".nsi", ".deb", ".msi", ".icns")) or lower == "install.sh":
         continue
     path = os.path.join(src, name)
     if os.path.isdir(path):
@@ -112,6 +113,11 @@ for banned in names:
     lower = banned.lower()
     if "setup" in lower or lower.endswith((".nsi", ".deb", ".msi")):
         sys.exit(f"{archive} must not contain installer {banned}")
+    if lower.endswith(".icns"):
+        sys.exit(
+            f"{archive} must not contain {banned}; "
+            "Windows uses cove.ico and the embedded PNG, not Cove.icns"
+        )
 print(f"windows archive has Cove.exe and {len(names)} files")
 PY
 
