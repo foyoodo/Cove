@@ -387,7 +387,7 @@ func (a *App) finishLook(c *ui.Context, shown Theme, wasMoving bool) {
 		a.codeBlock(ctx, b)
 	}
 	a.md.Block = func(ctx *ui.Context, d *parser.Document, i int) bool {
-		return a.renderTable(ctx, d, i) || a.renderStreamCaret(ctx, d, i)
+		return a.renderTable(ctx, d, i) || a.renderBoxTable(ctx, d, i) || a.renderStreamCaret(ctx, d, i)
 	}
 	mainWin, prefsWin := a.win, a.prefs
 	setGradientMode(a.instant, !a.instant && !a.reduceMotion, func() {

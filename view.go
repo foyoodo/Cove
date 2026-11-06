@@ -3261,7 +3261,18 @@ func (a *App) codeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 		// from CodeBlockPadding.
 		ui.Column(c).Padding(6.5, 0, 0, 0).Clip().AlignSelf(ui.Stretch).Label("qcode:" + lang).Children(func() {
 			ui.Box(c).AlignSelf(ui.Stretch).Children(func() {
-				b.Body(c).TrackScroll(&slot.st).AlignSelf(ui.Stretch)
+				if lines := codeBlockLines(b.Code()); isBoxTable(lines) {
+					// Fenced blocks always keep this header and Copy.
+					// Qualifying box-drawing lines share the cell grid so
+					// CJK and joins line up; they are not a table block.
+					ui.ScrollHorizontal(c).AlignSelf(ui.Stretch).TrackScroll(&slot.st).Label("code box scroller").Children(func() {
+						ui.Box(c).Padding(boxPadT, boxPadX, boxPadB, boxPadX).Children(func() {
+							a.paintCodeBoxBody(c, lines, nil)
+						})
+					})
+				} else {
+					b.Body(c).TrackScroll(&slot.st).AlignSelf(ui.Stretch)
+				}
 				hScrollFades(c, slot, "code", edge)
 			})
 		})
