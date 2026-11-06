@@ -1,0 +1,283 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"cove/themes"
+)
+
+func TestThemeSwitchBoundDecision(t *testing.T) {
+	if themeSwitchMainBound != 16*time.Millisecond {
+		t.Fatalf("main-thread bound is %s", themeSwitchMainBound)
+	}
+	ref := 50 * time.Millisecond
+	if themeSwitchMainFail(50*time.Microsecond, 40*time.Microsecond) {
+		t.Fatal("a few dozen microseconds on the main thread is within 16ms")
+	}
+	if !themeSwitchMainFail(themeSwitchMainBound+time.Millisecond, 0) {
+		t.Fatal("prime over the main-thread cap must fail")
+	}
+	if !themeSwitchMainFail(0, themeSwitchMainBound+time.Millisecond) {
+		t.Fatal("switch over the main-thread cap must fail")
+	}
+	if themeSwitchGenFail(time.Duration(float64(ref)*1.2), ref) {
+		t.Fatal("1.2× the reference is inside the CI spread and must pass")
+	}
+	if !themeSwitchGenFail(2*ref, ref) {
+		t.Fatal("2× the reference must fail")
+	}
+	limit := generationReadyLimit(ref)
+	if limit != 75*time.Millisecond {
+		t.Fatalf("limit %s, want 75ms", limit)
+	}
+	// Five CI runs put every healthy gate ratio at or under 6.39× and
+	// every slowed-2× ratio at or above 10.07×. The factor has to keep
+	// that whole gap: 6.39× passes, 10.07× fails.
+	calib := 100 * time.Millisecond
+	if themeSwitchCalibFail(639*time.Millisecond, calib) {
+		t.Fatal("6.39× calibration must pass")
+	}
+	if !themeSwitchCalibFail(1007*time.Millisecond, calib) {
+		t.Fatal("10.07× calibration must fail")
+	}
+}
+
+func TestThemeSwitchCalibrationRetry(t *testing.T) {
+	over := calibAttempt{reference: 100 * time.Millisecond, calib: 10 * time.Millisecond}
+	under := calibAttempt{reference: 50 * time.Millisecond, calib: 10 * time.Millisecond}
+	if !themeSwitchCalibFail(over.reference, over.calib) {
+		t.Fatal("100ms against 10ms is over the calibration factor")
+	}
+	if themeSwitchCalibFail(under.reference, under.calib) {
+		t.Fatal("50ms against 10ms is under the calibration factor")
+	}
+
+	t.Run("first over then under", func(t *testing.T) {
+		var logs []string
+		logf := func(format string, args ...any) {
+			logs = append(logs, strings.TrimSpace(sprintfTheme(format, args...)))
+		}
+		script := []calibAttempt{over, under}
+		n := 0
+		reference, calib, err := runCalibrationAttempts(logf, "TestThemeSwitchMainThreadBound", func() (time.Duration, time.Duration) {
+			sample := script[n]
+			n++
+			return sample.reference, sample.calib
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 2 {
+			t.Fatalf("attempts %d, want 2", n)
+		}
+		if reference != under.reference || calib != under.calib {
+			t.Fatalf("kept attempt %s / %s, want the passing second pair", reference, calib)
+		}
+		retry := perfRetryLine(logs)
+		if retry == "" {
+			t.Fatalf("missing PERF-RETRY: %v", logs)
+		}
+		if strings.Count(strings.Join(logs, "\n"), "PERF-RETRY:") != 1 {
+			t.Fatalf("PERF-RETRY count in %v", logs)
+		}
+		for _, want := range []string{
+			`test="TestThemeSwitchMainThreadBound"`,
+			"durations=reference=100ms,50ms calibration=10ms,10ms",
+			"ratios=10.00,5.00",
+		} {
+			if !strings.Contains(retry, want) {
+				t.Fatalf("line %q missing %q", retry, want)
+			}
+		}
+	})
+
+	t.Run("both over", func(t *testing.T) {
+		var logs []string
+		logf := func(format string, args ...any) {
+			logs = append(logs, strings.TrimSpace(sprintfTheme(format, args...)))
+		}
+		n := 0
+		_, _, err := runCalibrationAttempts(logf, "TestThemeSwitchMainThreadBound", func() (time.Duration, time.Duration) {
+			n++
+			return over.reference, over.calib
+		})
+		if err == nil {
+			t.Fatal("two calibration pairs over the factor returned success")
+		}
+		if n != 2 {
+			t.Fatalf("attempts %d, want 2", n)
+		}
+		if strings.Count(strings.Join(logs, "\n"), "PERF-RETRY:") != 1 {
+			t.Fatalf("PERF-RETRY count in %v", logs)
+		}
+		retry := perfRetryLine(logs)
+		for _, want := range []string{
+			`test="TestThemeSwitchMainThreadBound"`,
+			"durations=reference=100ms,100ms calibration=10ms,10ms",
+			"ratios=10.00,10.00",
+		} {
+			if !strings.Contains(retry, want) {
+				t.Fatalf("line %q missing %q", retry, want)
+			}
+		}
+		for _, want := range []string{"durations=reference=100ms,100ms", "ratios=10.00,10.00"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q missing %q", err, want)
+			}
+		}
+	})
+}
+
+func TestThemeSwitchRetryLog(t *testing.T) {
+	ref := 50 * time.Millisecond
+	var logs []string
+	logf := func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(sprintfTheme(format, args...)))
+	}
+	samples := []time.Duration{2 * ref, time.Duration(float64(ref) * 1.1)}
+	n := 0
+	_, err := runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
+		shown := samples[n]
+		n++
+		return 20 * time.Microsecond, 30 * time.Microsecond, shown, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("attempts %d, want 2", n)
+	}
+	retry := perfRetryLine(logs)
+	if retry == "" {
+		t.Fatalf("missing PERF-RETRY: %v", logs)
+	}
+	for _, want := range []string{`test="TestThemeSwitchMainThreadBound"`, "durations="} {
+		if !strings.Contains(retry, want) {
+			t.Fatalf("line %q missing %q", retry, want)
+		}
+	}
+
+	logs = nil
+	n = 0
+	_, err = runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
+		n++
+		return 20 * time.Microsecond, 30 * time.Microsecond, 2 * ref, nil
+	})
+	if err == nil {
+		t.Fatal("two generations at 2× the reference returned success")
+	}
+	if n != 2 {
+		t.Fatalf("attempts %d, want 2", n)
+	}
+	if strings.Count(strings.Join(logs, "\n"), "PERF-RETRY:") != 1 {
+		t.Fatalf("PERF-RETRY count in %v", logs)
+	}
+
+	logs = nil
+	n = 0
+	first := 90 * time.Millisecond
+	second := 40 * time.Millisecond
+	_, err = runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
+		n++
+		if n == 1 {
+			return 20 * time.Microsecond, 30 * time.Microsecond, first, nil
+		}
+		return themeSwitchMainBound + time.Millisecond, 0, second, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "main thread") {
+		t.Fatalf("error %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("retry of a later main-thread failure measured %d times, want 2", n)
+	}
+	retry = perfRetryLine(logs)
+	if retry == "" {
+		t.Fatalf("failed retry did not log PERF-RETRY: %v", logs)
+	}
+	for _, want := range []string{first.String(), second.String()} {
+		if !strings.Contains(retry, want) {
+			t.Fatalf("PERF-RETRY line %q missing duration %s", retry, want)
+		}
+	}
+
+	logs = nil
+	n = 0
+	_, err = runThemeSwitchAttempts(logf, "TestThemeSwitchMainThreadBound", ref, func() (time.Duration, time.Duration, time.Duration, error) {
+		n++
+		return themeSwitchMainBound + time.Millisecond, 0, ref, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "main thread") {
+		t.Fatalf("error %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("main-thread failure retried (%d attempts)", n)
+	}
+	if perfRetryLine(logs) != "" {
+		t.Fatalf("main-thread failure logged a retry: %v", logs)
+	}
+}
+
+func perfRetryLine(logs []string) string {
+	for _, line := range logs {
+		if strings.Contains(line, "PERF-RETRY:") {
+			return line
+		}
+	}
+	return ""
+}
+
+func sprintfTheme(format string, args ...any) string {
+	return fmt.Sprintf(format, args...)
+}
+
+// TestThemeSwitchGenerationRegression slows renderGradient itself, on
+// both the synchronous reference and the async switch, by about 2×.
+// The CPU calibration does not call renderGradient, so that gate fails.
+// The unslowed precheck uses the same one-retry calibration gate as
+// the production test. The slowed pair is not retried into a pass: it
+// has to be rejected.
+func TestThemeSwitchGenerationRegression(t *testing.T) {
+	const w, h = 2880, 1800
+	logf := func(format string, args ...any) {
+		t.Helper()
+		t.Logf(format, args...)
+	}
+	unslowed, _, err := runCalibrationAttempts(logf, t.Name(), func() (time.Duration, time.Duration) {
+		return measureInterleaved(logf, w, h)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gateMu.Lock()
+	gradRenderGate = func() { time.Sleep(unslowed) }
+	gateMu.Unlock()
+	defer func() {
+		gateMu.Lock()
+		gradRenderGate = nil
+		gateMu.Unlock()
+	}()
+
+	slowedRef, slowedCalib := measureInterleaved(logf, w, h)
+	resetGradientCache()
+	gradSync.Store(false)
+	gradMotion.Store(true)
+	now := time.Now()
+	presentGradient(themeLook(themes.ThemeWarm, false), w, h, now)
+	awaitGradients()
+	visible := time.Now()
+	presentGradient(themeLook(themes.ThemeTide, false), w, h, now)
+	awaitGradients()
+	shown := time.Since(visible)
+	t.Logf("slowed reference %s slowed switch %s calibration %s ratios %.2f and %.2f",
+		slowedRef, shown, slowedCalib, calibRatio(slowedRef, slowedCalib), calibRatio(shown, slowedCalib))
+	if !themeSwitchCalibFail(slowedRef, slowedCalib) {
+		t.Fatalf("2× renderGradient reference %s against calibration %s was accepted", slowedRef, slowedCalib)
+	}
+	if !themeSwitchCalibFail(shown, slowedCalib) {
+		t.Fatalf("2× renderGradient switch %s against calibration %s was accepted", shown, slowedCalib)
+	}
+}
